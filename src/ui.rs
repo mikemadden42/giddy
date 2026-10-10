@@ -302,6 +302,13 @@ fn detail_lines(app: &App) -> Vec<Line<'static>> {
         field("UPnP name", ssdp.friendly_name.clone());
         field("UPnP server", ssdp.server.clone());
     }
+    if let Some(http) = &d.http {
+        field("Web realm", http.realm.clone());
+        field("Web title", http.title.clone());
+        field("Web server", http.server.clone());
+    }
+    // "SSH-2.0-OpenSSH_9.6p1 Ubuntu…" -> "OpenSSH_9.6p1 Ubuntu…"
+    field("SSH", d.ssh_banner.as_deref().map(|b| b.splitn(3, '-').nth(2).unwrap_or(b).to_string()));
     if !d.open_ports.is_empty() {
         let ports: Vec<String> = d.open_ports.iter().map(u16::to_string).collect();
         field("Open ports", Some(ports.join(", ")));

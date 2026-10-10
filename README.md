@@ -11,6 +11,7 @@ giddy runs several unprivileged discovery methods at the same time and merges wh
 | **mDNS / DNS-SD** | Sends queries from an ephemeral port ("legacy unicast", RFC 6762 §6.7), so responders reply directly without needing port 5353. It also joins 5353 alongside avahi/mDNSResponder when the OS allows, to hear announcements. Collects hostnames, friendly instance names (e.g. *Donna's iPhone*), services and models. |
 | **SSDP / UPnP** | Sends `M-SEARCH` and fetches each device's description XML for its friendly name, manufacturer and model. Fetches are limited to addresses on the local subnet. |
 | **NetBIOS** | After the sweep, sends a node-status query (UDP 137) to each host in the ARP cache. Windows PCs, Samba servers and NAS boxes reply with their hostname and workgroup. |
+| **Service banners** | Reads what services say on connections the sweep already opened: the SSH version greeting on port 22, and the `Server` header, login realm and page title from an HTTP `GET /` on port 80. Each service is asked once per session. A login realm like `NETGEAR Orbi` often names a device that advertises nothing else. |
 | **Reverse DNS** | Asks the system resolver. Routers often know DHCP client names. |
 
 Each MAC address is matched against the IEEE registry (MA-L, MA-M and MA-S, longest match wins) to show the manufacturer. Randomized "private" addresses, as used by modern phones, are labeled as such instead of being left blank.
