@@ -7,7 +7,7 @@ use std::str::FromStr;
 use std::time::Instant;
 
 use crate::oui;
-use crate::scan::{MdnsRecord, NetBiosRecord, SsdpDescription, SsdpRecord};
+use crate::scan::{Banner, HttpInfo, MdnsRecord, NetBiosRecord, SsdpDescription, SsdpRecord};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct MacAddr(pub [u8; 6]);
@@ -109,6 +109,8 @@ pub struct Device {
     pub rdns: Option<String>,
     pub netbios_name: Option<String>,
     pub workgroup: Option<String>,
+    pub http: Option<HttpInfo>,
+    pub ssh_banner: Option<String>,
     pub open_ports: BTreeSet<u16>,
     pub sources: Sources,
     pub is_self: bool,
@@ -134,6 +136,8 @@ impl Device {
             rdns: None,
             netbios_name: None,
             workgroup: None,
+            http: None,
+            ssh_banner: None,
             open_ports: BTreeSet::new(),
             sources: Sources::default(),
             is_self: false,
@@ -163,8 +167,23 @@ impl Device {
             .or(self.mdns_host.as_deref())
             .or(self.netbios_name.as_deref())
             .or(self.rdns.as_deref())
+            .or(self.web_label())
             .or(self.mdns_model.as_deref())
             .or(self.ssdp.as_ref().and_then(|s| s.model.as_deref()))
+    }
+
+    /// A name from the device's web interface: the login realm, else the
+    /// page title, skipping generic ones like "Login" or "401 Authorization".
+    pub fn web_label(&self) -> Option<&str> {
+        let http = self.http.as_ref()?;
+        [http.realm.as_deref(), http.title.as_deref()].into_iter().flatten().find(|s| is_useful_label(s))
+    }
+
+    pub fn apply_banner(&mut self, banner: &Banner) {
+        match banner {
+            Banner::Ssh(line) => self.ssh_banner = Some(line.clone()),
+            Banner::Http(info) => self.http = Some(info.clone()),
+        }
     }
 
     /// Manufacturer: OUI registry first, then whatever the device says about itself.
@@ -284,6 +303,46 @@ fn clean_instance_name(name: &str) -> String {
     name.trim().to_string()
 }
 
+/// Rejects web page titles and realms that describe the page rather than
+/// the device.
+pub fn is_useful_label(s: &str) -> bool {
+    const GENERIC: &[&str] = &[
+        "login",
+        "log in",
+        "sign in",
+        "signin",
+        "logon",
+        "index of",
+        "welcome",
+        "redirect",
+        "loading",
+        "error",
+        "not found",
+        "forbidden",
+        "unauthorized",
+        "authoriz",
+        "authentica",
+        "restricted",
+        "protected",
+        "it works",
+        "default",
+        "untitled",
+        "document",
+        "web server",
+        "home page",
+        "homepage",
+        "please",
+        "password",
+        "access",
+    ];
+    let lower = s.to_lowercase();
+    !lower.is_empty()
+        && lower.chars().count() <= 60
+        && !lower.starts_with(|c: char| c.is_ascii_digit())
+        && !GENERIC.iter().any(|g| lower.contains(g))
+        && !looks_opaque(s)
+}
+
 /// True for machine-generated identifiers (UUIDs, long hex hashes, MACs)
 /// that make poor display names.
 pub fn looks_opaque(name: &str) -> bool {
@@ -350,6 +409,16 @@ mod tests {
         assert!(looks_opaque("921b12e49332d6ff252118bee27b8"));
         assert!(!looks_opaque("Bedroom"));
         assert!(!looks_opaque("cafe"));
+    }
+
+    #[test]
+    fn web_labels() {
+        assert!(is_useful_label("NETGEAR Orbi-micro"));
+        assert!(is_useful_label("Brother DCP-L2640DW"));
+        assert!(!is_useful_label("401 Authorization"));
+        assert!(!is_useful_label("Login"));
+        assert!(!is_useful_label("Index of /"));
+        assert!(!is_useful_label("Restricted area"));
     }
 
     #[test]

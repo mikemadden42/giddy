@@ -3,15 +3,17 @@
 //! first resolve the target's MAC via ARP, so this fills the neighbor cache
 //! for every live host — no raw sockets or root needed.
 
+use std::collections::HashSet;
 use std::net::{Ipv4Addr, SocketAddrV4};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tokio::net::{TcpStream, UdpSocket};
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 
+use super::banner;
 use super::{ScanEvent, Tx};
 use crate::iface::Iface;
 
@@ -25,7 +27,20 @@ const TCP_PORTS: &[u16] = &[80, 443, 22, 445, 62078];
 /// send. (NetBIOS on 137 gets a real query from the netbios module.)
 const UDP_PORTS: &[u16] = &[9];
 
-pub async fn run(iface: &Iface, tx: &Tx) -> anyhow::Result<()> {
+/// Services whose banners were already read, kept across cycles so each is
+/// only asked once per scan session.
+#[derive(Default)]
+pub struct State {
+    grabbed: Mutex<HashSet<(Ipv4Addr, u16)>>,
+}
+
+impl State {
+    fn first_visit(&self, ip: Ipv4Addr, port: u16) -> bool {
+        self.grabbed.lock().is_ok_and(|mut seen| seen.insert((ip, port)))
+    }
+}
+
+pub async fn run(iface: &Iface, tx: &Tx, state: &Arc<State>) -> anyhow::Result<()> {
     let targets = iface.sweep_targets();
     let total = targets.len();
     let udp = Arc::new(UdpSocket::bind(SocketAddrV4::new(iface.ip, 0)).await?);
@@ -36,9 +51,9 @@ pub async fn run(iface: &Iface, tx: &Tx) -> anyhow::Result<()> {
     let mut tasks = JoinSet::new();
     for ip in targets {
         let permit = permits.clone().acquire_owned().await?;
-        let (udp, tx, done) = (udp.clone(), tx.clone(), done.clone());
+        let (udp, tx, done, state) = (udp.clone(), tx.clone(), done.clone(), state.clone());
         tasks.spawn(async move {
-            probe(ip, &udp, &tx).await;
+            probe(ip, &udp, &tx, &state).await;
             drop(permit);
             let done = done.fetch_add(1, Ordering::Relaxed) + 1;
             let _ = tx.send(ScanEvent::SweepProgress { done, total });
@@ -48,14 +63,21 @@ pub async fn run(iface: &Iface, tx: &Tx) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn probe(ip: Ipv4Addr, udp: &UdpSocket, tx: &Tx) {
+async fn probe(ip: Ipv4Addr, udp: &UdpSocket, tx: &Tx, state: &State) {
     for port in UDP_PORTS {
         let _ = udp.send_to(&[0], SocketAddrV4::new(ip, *port)).await;
     }
     let attempts = TCP_PORTS.iter().map(|&port| async move {
         let res = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect((ip, port))).await;
         match res {
-            Ok(Ok(_)) => Some(Some(port)),
+            Ok(Ok(stream)) => {
+                if state.first_visit(ip, port)
+                    && let Some(banner) = banner::grab(stream, ip, port).await
+                {
+                    let _ = tx.send(ScanEvent::Banner { ip, banner });
+                }
+                Some(Some(port))
+            }
             Ok(Err(e)) if e.kind() == std::io::ErrorKind::ConnectionRefused => Some(None),
             _ => None,
         }

@@ -3,6 +3,7 @@
 //! neighbor (ARP) table.
 
 mod arp;
+mod banner;
 mod dns;
 mod mdns;
 mod netbios;
@@ -17,6 +18,8 @@ use socket2::{Domain, Protocol, Socket, Type};
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::task::JoinSet;
+
+pub use banner::{Banner, HttpInfo};
 
 use crate::device::MacAddr;
 use crate::iface::Iface;
@@ -82,6 +85,11 @@ pub enum ScanEvent {
     Ssdp(SsdpRecord),
     SsdpDescription(SsdpDescription),
     NetBios(NetBiosRecord),
+    /// What a service on an open port said about itself.
+    Banner {
+        ip: Ipv4Addr,
+        banner: Banner,
+    },
     ReverseDns {
         ip: Ipv4Addr,
         name: String,
@@ -130,11 +138,12 @@ pub async fn run(iface: Iface, cfg: Config, generation: u64, out: UnboundedSende
     background.spawn(ssdp::listen_passive(iface.clone(), tx.clone()));
 
     let mut ssdp_state = ssdp::State::default();
+    let sweep_state = std::sync::Arc::new(sweep::State::default());
     loop {
         // NetBIOS asks only hosts with ARP entries, so it follows the sweep.
         let sweep_then_netbios = async {
             if cfg.sweep {
-                tracked(&tx, Task::Sweep, sweep::run(&iface, &tx)).await;
+                tracked(&tx, Task::Sweep, sweep::run(&iface, &tx, &sweep_state)).await;
             }
             tracked(&tx, Task::NetBios, netbios::query(&iface, &tx)).await;
         };
