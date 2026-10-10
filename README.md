@@ -9,7 +9,7 @@ giddy runs several unprivileged discovery methods at the same time and merges wh
 | Method | What it does |
 | --- | --- |
 | **Subnet sweep** | Sends a tiny UDP datagram and a few TCP connection attempts to every address on the subnet. Before the kernel can send anything on the local link it has to resolve the target's MAC address, so this fills the ARP cache with every live host. Only ordinary sockets are used, with no raw packets. A TCP answer (open *or* refused) also proves a host is up. |
-| **ARP cache** | Reads the kernel neighbor table (`ip neigh` / `/proc/net/arp` on Linux, `arp -an` on macOS/BSD, `arp -a` on Windows) once a second to map IPs to MAC addresses. |
+| **ARP cache** | Reads the kernel neighbor table (`ip neigh` / `/proc/net/arp` on Linux, `sysctl` on macOS, `arp -an` on other BSDs, `arp -a` on Windows) once a second to map IPs to MAC addresses. |
 | **mDNS / DNS-SD** | Sends queries from an ephemeral port ("legacy unicast", RFC 6762 §6.7), so responders reply directly without needing port 5353. It also joins 5353 alongside avahi/mDNSResponder when the OS allows, to hear announcements. Collects hostnames, friendly instance names (e.g. *Donna's iPhone*), services and models. |
 | **SSDP / UPnP** | Sends `M-SEARCH` and fetches each device's description XML for its friendly name, manufacturer and model. Fetches are limited to addresses on the local subnet. |
 | **NetBIOS** | After the sweep, sends a node-status query (UDP 137) to each host in the ARP cache. Windows PCs, Samba servers and NAS boxes reply with their hostname and workgroup. |
@@ -20,10 +20,27 @@ Each device also gets a best-guess **type** (router, phone, tv, printer, console
 
 Each MAC address is matched against the IEEE registry (MA-L, MA-M and MA-S, longest match wins) to show the manufacturer. Randomized "private" addresses, as used by modern phones, are labeled as such instead of being left blank.
 
+## Install
+
+On Linux and Windows:
+
+```sh
+cargo install --path .           # or: cargo build --release
+```
+
+On macOS, use `make` instead of `cargo` directly:
+
+```sh
+make install                     # installs to ~/.cargo/bin/giddy
+make                             # or just build target/release/giddy
+```
+
+macOS hides the ARP table from command-line tools unless their code signature names a bundle ID. A binary from a plain `cargo build` runs, but it finds fewer devices and shows no MAC addresses or manufacturers. `make` builds as usual and then re-signs the binary with the bundle ID from the embedded `macos/Info.plist`. The first time giddy runs, macOS asks whether it may find devices on your local network. Choose **Allow**.
+
 ## Usage
 
 ```sh
-cargo run --release              # scan the interface with the default route
+giddy                            # scan the interface with the default route
 giddy -i wlan0                   # pick an interface
 giddy --list-interfaces
 giddy --interval 60              # seconds between discovery rounds (default 30)
