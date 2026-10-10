@@ -1,5 +1,7 @@
 # giddy
 
+[![CI](https://github.com/mikemadden42/giddy/actions/workflows/ci.yml/badge.svg)](https://github.com/mikemadden42/giddy/actions/workflows/ci.yml)
+
 A terminal UI that shows who's on your local network. No root required.
 
 giddy runs several unprivileged discovery methods at the same time and merges what they find into one live device list:
