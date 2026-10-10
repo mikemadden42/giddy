@@ -324,19 +324,7 @@ fn detail_lines(app: &App) -> Vec<Line<'static>> {
         let ports: Vec<String> = d.open_ports.iter().map(u16::to_string).collect();
         field("Open ports", Some(ports.join(", ")));
     }
-    let mut via = Vec::new();
-    for (src, name) in [
-        (Sources::ARP, "ARP"),
-        (Sources::MDNS, "mDNS"),
-        (Sources::SSDP, "SSDP"),
-        (Sources::TCP, "TCP"),
-        (Sources::NETBIOS, "NetBIOS"),
-    ] {
-        if d.sources.contains(src) {
-            via.push(name);
-        }
-    }
-    field("Seen via", Some(via.join(", ")));
+    field("Seen via", Some(d.sources.labels().join(", ")));
     field("First seen", Some(format!("{} ago", ago(d.first_seen.elapsed()))));
     field("Last seen", Some(format!("{} ago", ago(d.last_seen.elapsed()))));
 
