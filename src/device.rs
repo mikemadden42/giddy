@@ -223,8 +223,10 @@ impl Device {
     pub fn apply_netbios(&mut self, rec: &NetBiosRecord) {
         self.sources.insert(Sources::NETBIOS);
         self.touch();
-        self.netbios_name = Some(rec.name.clone());
-        self.workgroup.clone_from(&rec.group);
+        if rec.name.is_some() {
+            self.netbios_name.clone_from(&rec.name);
+            self.workgroup.clone_from(&rec.group);
+        }
         if self.mac.is_none()
             && let Some(mac) = rec.mac
         {
@@ -287,7 +289,7 @@ fn service_name_priority(service: &str) -> u8 {
 
 /// Strip decorations some services add to instance names, e.g. RAOP's
 /// `AABBCCDDEEFF@Living Room` or workstation's `host [aa:bb:cc:dd:ee:ff]`.
-fn clean_instance_name(name: &str) -> String {
+pub fn clean_instance_name(name: &str) -> String {
     let mut name = name.trim();
     if let Some((prefix, rest)) = name.split_once('@')
         && prefix.len() == 12

@@ -126,8 +126,7 @@ fn parse_response(buf: &[u8], ip: Ipv4Addr) -> Option<NetBiosRecord> {
         .map(|b| MacAddr([b[0], b[1], b[2], b[3], b[4], b[5]]))
         .filter(|m| !m.is_zero() && !m.is_broadcast_or_multicast());
 
-    let name = name.or(server_name)?;
-    Some(NetBiosRecord { ip, name, group, mac })
+    Some(NetBiosRecord { ip, name: name.or(server_name), group, mac })
 }
 
 /// Names are space-padded OEM text.
@@ -183,7 +182,7 @@ mod tests {
             [0xc8, 0x4b, 0xd6, 0xe7, 0x8a, 0x5c],
         );
         let rec = parse_response(&buf, Ipv4Addr::new(10, 0, 0, 41)).unwrap();
-        assert_eq!(rec.name, "DESKTOP-7Q2LM");
+        assert_eq!(rec.name.as_deref(), Some("DESKTOP-7Q2LM"));
         assert_eq!(rec.group.as_deref(), Some("WORKGROUP"));
         assert_eq!(rec.mac.unwrap().to_string(), "c8:4b:d6:e7:8a:5c");
     }
@@ -192,8 +191,16 @@ mod tests {
     fn samba_server_name_without_mac() {
         let buf = response(&[entry("NAS", 0x20, 0x0400), entry("HOME", 0x00, 0x8400)], [0; 6]);
         let rec = parse_response(&buf, Ipv4Addr::new(10, 0, 0, 9)).unwrap();
-        assert_eq!(rec.name, "NAS");
+        assert_eq!(rec.name.as_deref(), Some("NAS"));
         assert!(rec.mac.is_none());
+    }
+
+    #[test]
+    fn macos_empty_name_table() {
+        let buf = response(&[], [0x50, 0xa6, 0xd8, 0xc3, 0x41, 0xef]);
+        let rec = parse_response(&buf, Ipv4Addr::new(10, 0, 0, 73)).unwrap();
+        assert!(rec.name.is_none());
+        assert!(rec.mac.is_some());
     }
 
     #[test]

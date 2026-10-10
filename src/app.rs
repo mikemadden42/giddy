@@ -13,12 +13,14 @@ use tokio::task::JoinHandle;
 use crate::aliases::Aliases;
 use crate::device::{Device, Sources};
 use crate::iface::Iface;
+use crate::kind;
 use crate::scan::{self, ScanEvent, Tagged, Task};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum SortKey {
     Ip,
     Name,
+    Type,
     Manufacturer,
     LastSeen,
 }
@@ -28,6 +30,7 @@ impl SortKey {
         match self {
             SortKey::Ip => "IP",
             SortKey::Name => "name",
+            SortKey::Type => "type",
             SortKey::Manufacturer => "manufacturer",
             SortKey::LastSeen => "last seen",
         }
@@ -36,7 +39,8 @@ impl SortKey {
     fn next(self) -> Self {
         match self {
             SortKey::Ip => SortKey::Name,
-            SortKey::Name => SortKey::Manufacturer,
+            SortKey::Name => SortKey::Type,
+            SortKey::Type => SortKey::Manufacturer,
             SortKey::Manufacturer => SortKey::LastSeen,
             SortKey::LastSeen => SortKey::Ip,
         }
@@ -250,6 +254,9 @@ impl App {
             let ord = match self.sort {
                 SortKey::Ip => a.ip.cmp(&b.ip),
                 SortKey::Name => sort_text(a.display_name()).cmp(&sort_text(b.display_name())),
+                // Unknown types sort last.
+                SortKey::Type => (kind::classify(a).is_none(), kind::classify(a))
+                    .cmp(&(kind::classify(b).is_none(), kind::classify(b))),
                 SortKey::Manufacturer => sort_text(a.manufacturer()).cmp(&sort_text(b.manufacturer())),
                 SortKey::LastSeen => b.last_seen.cmp(&a.last_seen),
             };
@@ -432,6 +439,7 @@ fn matches_filter(d: &Device, needle: &str) -> bool {
         d.rdns.as_deref(),
         d.netbios_name.as_deref(),
         d.web_label(),
+        kind::classify(d).map(kind::Kind::label),
         d.http.as_ref().and_then(|h| h.server.as_deref()),
         d.ssh_banner.as_deref(),
     ]
