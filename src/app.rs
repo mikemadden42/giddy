@@ -57,13 +57,14 @@ pub struct ScanStatus {
     pub sweeping: bool,
     pub mdns: bool,
     pub ssdp: bool,
+    pub netbios: bool,
     pub cycles: u32,
     pub next_at: Option<Instant>,
 }
 
 impl ScanStatus {
     pub fn busy(&self) -> bool {
-        self.sweeping || self.mdns || self.ssdp
+        self.sweeping || self.mdns || self.ssdp || self.netbios
     }
 }
 
@@ -210,6 +211,7 @@ impl App {
             ScanEvent::Mdns(rec) => device_entry(devices, iface, rec.ip).apply_mdns(&rec),
             ScanEvent::Ssdp(rec) => device_entry(devices, iface, rec.ip).apply_ssdp(&rec),
             ScanEvent::SsdpDescription(desc) => device_entry(devices, iface, desc.ip).apply_ssdp_description(&desc),
+            ScanEvent::NetBios(rec) => device_entry(devices, iface, rec.ip).apply_netbios(&rec),
             ScanEvent::ReverseDns { ip, name } => device_entry(devices, iface, ip).rdns = Some(name),
             ScanEvent::SweepProgress { done, total } => self.status.sweep = Some((done, total)),
             ScanEvent::TaskStarted(task) | ScanEvent::TaskFinished(task) => {
@@ -218,6 +220,7 @@ impl App {
                     Task::Sweep => self.status.sweeping = running,
                     Task::Mdns => self.status.mdns = running,
                     Task::Ssdp => self.status.ssdp = running,
+                    Task::NetBios => self.status.netbios = running,
                 }
                 if running {
                     self.status.next_at = None;
@@ -426,6 +429,7 @@ fn matches_filter(d: &Device, needle: &str) -> bool {
         d.model(),
         d.mdns_host.as_deref(),
         d.rdns.as_deref(),
+        d.netbios_name.as_deref(),
     ]
     .into_iter()
     .flatten()

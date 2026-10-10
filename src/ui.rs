@@ -83,6 +83,9 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
         if st.ssdp {
             tasks.push("SSDP".into());
         }
+        if st.netbios {
+            tasks.push("NetBIOS".into());
+        }
         right.push(Span::raw(tasks.join(" · ")));
     } else if let Some(next) = st.next_at {
         let secs = next.saturating_duration_since(Instant::now()).as_secs();
@@ -167,7 +170,7 @@ fn draw_table(f: &mut Frame, app: &mut App, area: Rect) {
     }
     if wide {
         header.push("Via");
-        widths.push(Constraint::Length(4));
+        widths.push(Constraint::Length(5));
     }
     header.push("Seen");
     widths.push(Constraint::Length(5));
@@ -259,6 +262,7 @@ fn sources_line(d: &Device) -> Line<'static> {
         badge(Sources::MDNS, "M", Color::Green),
         badge(Sources::SSDP, "U", Color::Magenta),
         badge(Sources::TCP, "T", Color::Yellow),
+        badge(Sources::NETBIOS, "N", Color::Red),
     ])
 }
 
@@ -291,6 +295,8 @@ fn detail_lines(app: &App) -> Vec<Line<'static>> {
     field("Manufacturer", d.manufacturer().map(String::from));
     field("Model", d.model().map(String::from));
     field("mDNS host", d.mdns_host.as_ref().map(|h| format!("{h}.local")));
+    field("NetBIOS name", d.netbios_name.clone());
+    field("Workgroup", d.workgroup.clone());
     field("DNS name", d.rdns.clone());
     if let Some(ssdp) = &d.ssdp {
         field("UPnP name", ssdp.friendly_name.clone());
@@ -301,8 +307,13 @@ fn detail_lines(app: &App) -> Vec<Line<'static>> {
         field("Open ports", Some(ports.join(", ")));
     }
     let mut via = Vec::new();
-    for (src, name) in [(Sources::ARP, "ARP"), (Sources::MDNS, "mDNS"), (Sources::SSDP, "SSDP"), (Sources::TCP, "TCP")]
-    {
+    for (src, name) in [
+        (Sources::ARP, "ARP"),
+        (Sources::MDNS, "mDNS"),
+        (Sources::SSDP, "SSDP"),
+        (Sources::TCP, "TCP"),
+        (Sources::NETBIOS, "NetBIOS"),
+    ] {
         if d.sources.contains(src) {
             via.push(name);
         }
@@ -401,7 +412,9 @@ fn draw_help(f: &mut Frame) {
         Span::styled("U", Style::new().fg(Color::Magenta)),
         Span::styled(" UPnP/SSDP  ", muted()),
         Span::styled("T", Style::new().fg(Color::Yellow)),
-        Span::styled(" TCP", muted()),
+        Span::styled(" TCP  ", muted()),
+        Span::styled("N", Style::new().fg(Color::Red)),
+        Span::styled(" NetBIOS", muted()),
     ]));
     let area = popup(f.area(), 52, lines.len() as u16 + 2);
     f.render_widget(Clear, area);
