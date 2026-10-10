@@ -212,6 +212,7 @@ impl App {
             ScanEvent::Ssdp(rec) => device_entry(devices, iface, rec.ip).apply_ssdp(&rec),
             ScanEvent::SsdpDescription(desc) => device_entry(devices, iface, desc.ip).apply_ssdp_description(&desc),
             ScanEvent::NetBios(rec) => device_entry(devices, iface, rec.ip).apply_netbios(&rec),
+            ScanEvent::Banner { ip, banner } => device_entry(devices, iface, ip).apply_banner(&banner),
             ScanEvent::ReverseDns { ip, name } => device_entry(devices, iface, ip).rdns = Some(name),
             ScanEvent::SweepProgress { done, total } => self.status.sweep = Some((done, total)),
             ScanEvent::TaskStarted(task) | ScanEvent::TaskFinished(task) => {
@@ -430,6 +431,9 @@ fn matches_filter(d: &Device, needle: &str) -> bool {
         d.mdns_host.as_deref(),
         d.rdns.as_deref(),
         d.netbios_name.as_deref(),
+        d.web_label(),
+        d.http.as_ref().and_then(|h| h.server.as_deref()),
+        d.ssh_banner.as_deref(),
     ]
     .into_iter()
     .flatten()
