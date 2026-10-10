@@ -58,12 +58,78 @@ pub fn read(dev: &str) -> Vec<Entry> {
         let _ = dev;
         run("arp", &["-a"]).map(|t| parse_windows_arp(&t)).unwrap_or_default()
     }
-    #[cfg(all(unix, not(target_os = "linux")))]
+    // macOS hides the table from an `arp` we spawn, so ask the kernel directly.
+    #[cfg(target_os = "macos")]
+    {
+        sysctl_arp(dev)
+    }
+    #[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
     {
         run("arp", &["-an"]).map(|t| parse_bsd_arp(&t, dev)).unwrap_or_default()
     }
 }
 
+/// What `arp -an` does: fetch the `RTF_LLINFO` routes via `sysctl(NET_RT_FLAGS)`.
+#[cfg(target_os = "macos")]
+fn sysctl_arp(dev: &str) -> Vec<Entry> {
+    let Ok(name) = std::ffi::CString::new(dev) else { return Vec::new() };
+    // SAFETY: `name` is NUL-terminated.
+    let index = unsafe { libc::if_nametoindex(name.as_ptr()) } as u16;
+    let mut mib = [libc::CTL_NET, libc::PF_ROUTE, 0, libc::AF_INET, libc::NET_RT_FLAGS, libc::RTF_LLINFO];
+    let null = std::ptr::null_mut();
+    let mut len = 0;
+    // SAFETY: a null buffer asks only for the required size.
+    if unsafe { libc::sysctl(mib.as_mut_ptr(), 6, null, &mut len, null, 0) } != 0 {
+        return Vec::new();
+    }
+    // Headroom in case the table grows between the two calls.
+    let mut buf = vec![0u8; len * 2];
+    len = buf.len();
+    // SAFETY: `buf` is writable for `len` bytes.
+    if unsafe { libc::sysctl(mib.as_mut_ptr(), 6, buf.as_mut_ptr().cast(), &mut len, null, 0) } != 0 {
+        return Vec::new();
+    }
+    buf.truncate(len);
+    parse_rt_msgs(&buf, index)
+}
+
+/// Walk `rt_msghdr` records on interface `if_index`. Each header is followed
+/// by RTA_DST (a `sockaddr_in`) then RTA_GATEWAY (a `sockaddr_dl` with the MAC).
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn parse_rt_msgs(mut buf: &[u8], if_index: u16) -> Vec<Entry> {
+    const HDR_LEN: usize = 92; // size_of::<rt_msghdr>() on Darwin
+    let mut entries = Vec::new();
+    while buf.len() >= HDR_LEN {
+        let msglen = u16::from_ne_bytes([buf[0], buf[1]]) as usize;
+        if msglen < HDR_LEN || msglen > buf.len() {
+            break;
+        }
+        let (msg, rest) = buf.split_at(msglen);
+        buf = rest;
+        if u16::from_ne_bytes([msg[4], msg[5]]) != if_index {
+            continue;
+        }
+        let dst = &msg[HDR_LEN..];
+        // sockaddr_in: len, family (AF_INET = 2), port, addr. Padded to 4 bytes.
+        if dst.len() < 8 || dst[1] != 2 {
+            continue;
+        }
+        let ip = Ipv4Addr::new(dst[4], dst[5], dst[6], dst[7]);
+        let gw = &dst[(dst[0] as usize).next_multiple_of(4)..];
+        // sockaddr_dl: len, family (AF_LINK = 18), index, type, nlen, alen, slen, data.
+        if gw.len() < 8 || gw[1] != 18 || gw[6] != 6 {
+            continue;
+        }
+        let start = 8 + gw[5] as usize;
+        let Some(mac) = gw.get(start..start + 6) else { continue };
+        let mac = MacAddr(mac.try_into().unwrap());
+        if usable(mac) {
+            entries.push(Entry { ip, mac, active: true });
+        }
+    }
+    entries
+}
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 #[cfg_attr(not(any(target_os = "linux", unix, windows)), allow(dead_code))]
 fn run(cmd: &str, args: &[&str]) -> Option<String> {
     let out = std::process::Command::new(cmd).args(args).output().ok()?;
@@ -109,7 +175,7 @@ fn parse_proc_arp(text: &str, dev: &str) -> Vec<Entry> {
 }
 
 /// `? (10.0.0.1) at 3c:37:86:18:ee:a3 on en0 ifscope [ethernet]`
-#[cfg_attr(any(target_os = "linux", windows), allow(dead_code))]
+#[cfg_attr(any(target_os = "linux", target_os = "macos", windows), allow(dead_code))]
 fn parse_bsd_arp(text: &str, dev: &str) -> Vec<Entry> {
     text.lines()
         .filter_map(|line| {
@@ -161,6 +227,35 @@ mod tests {
         let e = parse_proc_arp(text, "eth0");
         assert_eq!(e.len(), 1);
         assert_eq!(e[0].ip, Ipv4Addr::new(10, 0, 0, 38));
+    }
+
+    #[test]
+    fn rt_msgs() {
+        fn msg(index: u16, ip: [u8; 4], mac: Option<[u8; 6]>) -> Vec<u8> {
+            let mut m = vec![0u8; 92];
+            m[4..6].copy_from_slice(&index.to_ne_bytes());
+            m.extend([16, 2, 0, 0]);
+            m.extend(ip);
+            m.extend([0; 8]);
+            // An incomplete entry has a sockaddr_dl with no address.
+            m.extend([20, 18, 0, 0, 6, 0, if mac.is_some() { 6 } else { 0 }, 0]);
+            m.extend(mac.unwrap_or_default());
+            m.extend([0; 6]);
+            let len = m.len() as u16;
+            m[0..2].copy_from_slice(&len.to_ne_bytes());
+            m
+        }
+        let buf = [
+            msg(4, [10, 0, 0, 1], Some([0x3c, 0x37, 0x86, 0x18, 0xee, 0xa3])),
+            msg(4, [10, 0, 0, 2], None),
+            msg(7, [10, 0, 0, 3], Some([0x3c, 0x37, 0x86, 0x19, 0x81, 0xc1])),
+            msg(4, [10, 0, 0, 255], Some([0xff; 6])),
+        ]
+        .concat();
+        let e = parse_rt_msgs(&buf, 4);
+        assert_eq!(e.len(), 1);
+        assert_eq!(e[0].ip, Ipv4Addr::new(10, 0, 0, 1));
+        assert_eq!(e[0].mac.to_string(), "3c:37:86:18:ee:a3");
     }
 
     #[test]
