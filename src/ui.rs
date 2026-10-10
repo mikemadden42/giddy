@@ -12,7 +12,8 @@ use ratatui::widgets::{
 };
 
 use crate::app::{App, Mode};
-use crate::device::{Device, Sources, describe_service, looks_opaque};
+use crate::device::{Device, Sources, clean_instance_name, describe_service, looks_opaque};
+use crate::kind;
 
 const ACCENT: Color = Color::Cyan;
 const MUTED: Color = Color::DarkGray;
@@ -162,8 +163,15 @@ fn draw_table(f: &mut Frame, app: &mut App, area: Rect) {
 
     let wide = area.width >= 110;
     let show_vendor = area.width >= 80;
-    let mut header = vec!["IP", "Name", "MAC"];
-    let mut widths = vec![Constraint::Length(15), Constraint::Fill(3), Constraint::Length(17)];
+    let show_type = area.width >= 95;
+    let mut header = vec!["IP"];
+    let mut widths = vec![Constraint::Length(15)];
+    if show_type {
+        header.push("Type");
+        widths.push(Constraint::Length(10));
+    }
+    header.extend(["Name", "MAC"]);
+    widths.extend([Constraint::Fill(3), Constraint::Length(17)]);
     if show_vendor {
         header.push("Manufacturer");
         widths.push(Constraint::Fill(2));
@@ -178,11 +186,13 @@ fn draw_table(f: &mut Frame, app: &mut App, area: Rect) {
     let stale_after = (app.cfg.interval * 3).max(Duration::from_secs(90));
     let rows = app.view.iter().filter_map(|ip| app.devices.get(ip)).map(|d| {
         let stale = d.last_seen.elapsed() > stale_after;
-        let mut cells = vec![
-            Cell::from(d.ip.to_string()),
-            Cell::from(name_line(d)),
-            Cell::from(d.mac.map(|m| m.to_string()).unwrap_or_default()),
-        ];
+        let mut cells = vec![Cell::from(d.ip.to_string())];
+        if show_type {
+            let label = kind::classify(d).map_or("", kind::Kind::label);
+            cells.push(Cell::from(Span::styled(label, Style::new().fg(Color::Blue))));
+        }
+        cells.push(Cell::from(name_line(d)));
+        cells.push(Cell::from(d.mac.map(|m| m.to_string()).unwrap_or_default()));
         if show_vendor {
             cells.push(Cell::from(vendor_span(d)));
         }
@@ -292,6 +302,7 @@ fn detail_lines(app: &App) -> Vec<Line<'static>> {
     };
     field("IP", Some(d.ip.to_string()));
     field("MAC", d.mac.map(|m| if m.is_local() { format!("{m} (randomized)") } else { m.to_string() }));
+    field("Type", kind::classify(d).map(|k| k.label().to_string()));
     field("Manufacturer", d.manufacturer().map(String::from));
     field("Model", d.model().map(String::from));
     field("mDNS host", d.mdns_host.as_ref().map(|h| format!("{h}.local")));
@@ -333,9 +344,10 @@ fn detail_lines(app: &App) -> Vec<Line<'static>> {
         lines.push(Line::raw(""));
         lines.push(Line::styled("Services", Style::new().fg(ACCENT).bold()));
         for (svc, instance) in &d.services {
-            let mut spans = vec![Span::raw(format!("{:<18}", describe_service(svc)))];
-            if !looks_opaque(instance) {
-                spans.push(Span::styled(instance.clone(), muted()));
+            let mut spans = vec![Span::raw(format!("{:<20} ", describe_service(svc)))];
+            let instance = clean_instance_name(instance);
+            if !looks_opaque(&instance) {
+                spans.push(Span::styled(instance, muted()));
             }
             lines.push(Line::from(spans));
         }
