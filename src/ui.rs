@@ -14,6 +14,7 @@ use ratatui::widgets::{
 use crate::app::{App, Mode};
 use crate::device::{Device, Sources, clean_instance_name, describe_service, looks_opaque};
 use crate::kind;
+use crate::scan::Task;
 
 const ACCENT: Color = Color::Cyan;
 const MUTED: Color = Color::DarkGray;
@@ -36,7 +37,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             let [l, d] = Layout::horizontal([Constraint::Min(60), Constraint::Length(52)]).areas(body);
             (l, d)
         } else {
-            let height = (lines.len() as u16 + 2).min(body.height / 2).max(5);
+            let height = to_u16(lines.len()).saturating_add(2).min(body.height / 2).max(5);
             let [l, d] = Layout::vertical([Constraint::Min(6), Constraint::Length(height)]).areas(body);
             (l, d)
         };
@@ -73,20 +74,19 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
     if st.busy() {
         right.push(Span::styled(SPINNER[app.frame % SPINNER.len()], Style::new().fg(ACCENT)));
         right.push(Span::raw(" "));
-        let mut tasks = Vec::new();
-        if st.sweeping {
-            let (done, total) = st.sweep.unwrap_or((0, 0));
-            tasks.push(format!("sweep {done}/{total}"));
-        }
-        if st.mdns {
-            tasks.push("mDNS".into());
-        }
-        if st.ssdp {
-            tasks.push("SSDP".into());
-        }
-        if st.netbios {
-            tasks.push("NetBIOS".into());
-        }
+        let tasks: Vec<String> = st
+            .running
+            .iter()
+            .map(|task| match task {
+                Task::Sweep => {
+                    let (done, total) = st.sweep.unwrap_or((0, 0));
+                    format!("sweep {done}/{total}")
+                }
+                Task::Mdns => "mDNS".into(),
+                Task::Ssdp => "SSDP".into(),
+                Task::NetBios => "NetBIOS".into(),
+            })
+            .collect();
         right.push(Span::raw(tasks.join(" · ")));
     } else if let Some(next) = st.next_at {
         let secs = next.saturating_duration_since(Instant::now()).as_secs();
@@ -131,13 +131,12 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Line::from(spans), area);
 
     if let Some((msg, _)) = &app.toast {
-        let width = (msg.chars().count() as u16 + 2).min(area.width);
+        let toast = Line::from(Span::styled(format!(" {msg} "), Style::new().bg(Color::Yellow).fg(Color::Black)));
+        // Display width, not char count, so wide characters size correctly.
+        let width = to_u16(toast.width()).min(area.width);
         let toast_area = Rect { x: area.right() - width, width, ..area };
         f.render_widget(Clear, toast_area);
-        f.render_widget(
-            Line::from(Span::styled(format!(" {msg} "), Style::new().bg(Color::Yellow).fg(Color::Black))),
-            toast_area,
-        );
+        f.render_widget(toast, toast_area);
     }
 }
 
@@ -344,6 +343,11 @@ fn detail_lines(app: &App) -> Vec<Line<'static>> {
     lines
 }
 
+/// Terminal dimensions are `u16`; saturate rather than wrap on huge counts.
+fn to_u16(n: usize) -> u16 {
+    u16::try_from(n).unwrap_or(u16::MAX)
+}
+
 fn popup(area: Rect, width: u16, height: u16) -> Rect {
     let [v] = Layout::vertical([Constraint::Length(height.min(area.height))]).flex(Flex::Center).areas(area);
     let [h] = Layout::horizontal([Constraint::Length(width.min(area.width))]).flex(Flex::Center).areas(v);
@@ -358,7 +362,7 @@ fn popup_block(title: &str) -> Block<'_> {
 }
 
 fn draw_interfaces(f: &mut Frame, app: &App, cursor: usize) {
-    let height = app.ifaces.len() as u16 + 2;
+    let height = to_u16(app.ifaces.len()).saturating_add(2);
     let area = popup(f.area(), 56, height);
     let items: Vec<ListItem> = app
         .ifaces
@@ -423,7 +427,7 @@ fn draw_help(f: &mut Frame) {
         Span::styled("N", Style::new().fg(Color::Red)),
         Span::styled(" NetBIOS", muted()),
     ]));
-    let area = popup(f.area(), 52, lines.len() as u16 + 2);
+    let area = popup(f.area(), 52, to_u16(lines.len()).saturating_add(2));
     f.render_widget(Clear, area);
     f.render_widget(Paragraph::new(lines).block(popup_block("Keys")), area);
 }

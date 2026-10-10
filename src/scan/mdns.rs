@@ -244,6 +244,6 @@ mod tests {
         assert_eq!(rec.instance.as_deref(), Some("Living Room"));
         assert_eq!(rec.friendly.as_deref(), Some("TV"));
         assert_eq!(rec.model.as_deref(), Some("Chromecast"));
-        assert!(follow.unresolved.is_empty());
+        assert_eq!(follow.unresolved, Vec::<Name>::new());
     }
 }
