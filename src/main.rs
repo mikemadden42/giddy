@@ -99,7 +99,7 @@ async fn run(
         terminal.draw(|f| ui::draw(f, app))?;
         tokio::select! {
             ev = events.next() => match ev {
-                Some(Ok(ev)) => app.on_terminal_event(ev),
+                Some(Ok(ev)) => app.on_terminal_event(&ev),
                 Some(Err(e)) => return Err(e.into()),
                 None => break,
             },
@@ -134,7 +134,7 @@ async fn run_once(mut app: App, mut rx: UnboundedReceiver<scan::Tagged>, format:
     tokio::pin!(settle);
     loop {
         tokio::select! {
-            _ = &mut settle => break,
+            () = &mut settle => break,
             Some(ev) = rx.recv() => app.on_scan(ev),
         }
     }

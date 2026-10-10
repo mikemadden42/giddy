@@ -74,19 +74,21 @@ pub fn read(dev: &str) -> Vec<Entry> {
 fn sysctl_arp(dev: &str) -> Vec<Entry> {
     let Ok(name) = std::ffi::CString::new(dev) else { return Vec::new() };
     // SAFETY: `name` is NUL-terminated.
-    let index = unsafe { libc::if_nametoindex(name.as_ptr()) } as u16;
+    let raw_index = unsafe { libc::if_nametoindex(name.as_ptr()) };
+    // 0 means no such interface; route messages carry the index as a u16.
+    let Ok(index @ 1..) = u16::try_from(raw_index) else { return Vec::new() };
     let mut mib = [libc::CTL_NET, libc::PF_ROUTE, 0, libc::AF_INET, libc::NET_RT_FLAGS, libc::RTF_LLINFO];
     let null = std::ptr::null_mut();
     let mut len = 0;
     // SAFETY: a null buffer asks only for the required size.
-    if unsafe { libc::sysctl(mib.as_mut_ptr(), 6, null, &mut len, null, 0) } != 0 {
+    if unsafe { libc::sysctl(mib.as_mut_ptr(), 6, null, &raw mut len, null, 0) } != 0 {
         return Vec::new();
     }
     // Headroom in case the table grows between the two calls.
     let mut buf = vec![0u8; len * 2];
     len = buf.len();
     // SAFETY: `buf` is writable for `len` bytes.
-    if unsafe { libc::sysctl(mib.as_mut_ptr(), 6, buf.as_mut_ptr().cast(), &mut len, null, 0) } != 0 {
+    if unsafe { libc::sysctl(mib.as_mut_ptr(), 6, buf.as_mut_ptr().cast(), &raw mut len, null, 0) } != 0 {
         return Vec::new();
     }
     buf.truncate(len);
@@ -94,7 +96,7 @@ fn sysctl_arp(dev: &str) -> Vec<Entry> {
 }
 
 /// Walk `rt_msghdr` records on interface `if_index`. Each header is followed
-/// by RTA_DST (a `sockaddr_in`) then RTA_GATEWAY (a `sockaddr_dl` with the MAC).
+/// by `RTA_DST` (a `sockaddr_in`) then `RTA_GATEWAY` (a `sockaddr_dl` with the MAC).
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn parse_rt_msgs(mut buf: &[u8], if_index: u16) -> Vec<Entry> {
     const HDR_LEN: usize = 92; // size_of::<rt_msghdr>() on Darwin
@@ -241,7 +243,7 @@ mod tests {
             m.extend([20, 18, 0, 0, 6, 0, if mac.is_some() { 6 } else { 0 }, 0]);
             m.extend(mac.unwrap_or_default());
             m.extend([0; 6]);
-            let len = m.len() as u16;
+            let len = u16::try_from(m.len()).unwrap();
             m[0..2].copy_from_slice(&len.to_ne_bytes());
             m
         }

@@ -19,7 +19,7 @@ pub struct Iface {
 
 impl Iface {
     fn mask_for(prefix: u8) -> u32 {
-        if prefix == 0 { 0 } else { u32::MAX << (32 - prefix as u32) }
+        if prefix == 0 { 0 } else { u32::MAX << (32 - u32::from(prefix)) }
     }
 
     pub fn mask(&self) -> u32 {
@@ -61,7 +61,8 @@ pub fn list() -> Vec<Iface> {
         .filter(|i| !i.is_loopback())
         .filter_map(|i| match i.addr {
             if_addrs::IfAddr::V4(v4) => {
-                let prefix = u32::from(v4.netmask).leading_ones() as u8;
+                // At most 32, so the conversion can't fail.
+                let prefix = u8::try_from(u32::from(v4.netmask).leading_ones()).unwrap_or(32);
                 (prefix < 31 && !v4.ip.is_link_local()).then(|| Iface {
                     mac: read_mac(&i.name),
                     gateway: default_gateway(&i.name),
@@ -70,7 +71,7 @@ pub fn list() -> Vec<Iface> {
                     prefix,
                 })
             }
-            _ => None,
+            if_addrs::IfAddr::V6(_) => None,
         })
         .collect();
     out.sort_by(|a, b| a.name.cmp(&b.name).then(a.ip.cmp(&b.ip)));
@@ -85,7 +86,7 @@ pub fn default_index(ifaces: &[Iface]) -> Option<usize> {
     sock.connect((Ipv4Addr::new(192, 0, 2, 1), 9)).ok()?;
     let local = match sock.local_addr().ok()? {
         std::net::SocketAddr::V4(a) => *a.ip(),
-        _ => return None,
+        std::net::SocketAddr::V6(_) => return None,
     };
     ifaces.iter().position(|i| i.ip == local)
 }
