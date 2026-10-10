@@ -46,3 +46,9 @@ The **Via** column shows which methods saw each device: **A**RP, **M**DNS, **U**
 
 - Large subnets are swept only within the /22 around your own address (1022 hosts).
 - The manufacturer database is embedded in the binary. Run `scripts/update-oui.sh` to refresh `data/oui.tsv.gz` from Wireshark's `manuf` file.
+
+## Acknowledgements
+
+giddy was inspired by [whosthere](https://github.com/ramonvermeulen/whosthere) by Ramon Vermeulen, a LAN discovery tool with an interactive TUI written in Go. Its approach of combining mDNS, SSDP and an ARP-cache sweep without elevated privileges, and its device-list interface, shaped this project. giddy is an independent Rust implementation and shares no code with it. If you prefer Go, check out whosthere.
+
+Manufacturer data comes from the IEEE registry, as compiled by the [Wireshark](https://www.wireshark.org/) project.
