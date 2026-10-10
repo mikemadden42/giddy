@@ -27,6 +27,14 @@ giddy --list-interfaces
 giddy --interval 60              # seconds between discovery rounds (default 30)
 giddy --no-sweep                 # passive-ish: mDNS, SSDP and existing ARP cache only
 giddy --once                     # one round, print a plain-text table, exit
+giddy --format json > scan.json  # one round as JSON (every detail; implies --once)
+giddy --format csv > scan.csv    # one round as CSV, one row per device
+```
+
+Progress messages go to stderr, so redirected output stays clean. In JSON, every key is always present (`null` or `[]` when unknown), so tools like `jq` can rely on the shape:
+
+```sh
+giddy --format json | jq -r '.devices[] | select(.type == "printer") | .ip'
 ```
 
 ### Keys

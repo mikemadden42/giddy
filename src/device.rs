@@ -81,6 +81,25 @@ impl Sources {
     pub fn contains(&self, other: Sources) -> bool {
         self.0 & other.0 == other.0
     }
+
+    /// (flag, machine id, display label) for every source.
+    const ALL: [(Sources, &'static str, &'static str); 5] = [
+        (Sources::ARP, "arp", "ARP"),
+        (Sources::MDNS, "mdns", "mDNS"),
+        (Sources::SSDP, "ssdp", "SSDP"),
+        (Sources::TCP, "tcp", "TCP"),
+        (Sources::NETBIOS, "netbios", "NetBIOS"),
+    ];
+
+    /// Lowercase ids of the sources present, for export.
+    pub fn names(&self) -> Vec<&'static str> {
+        Self::ALL.iter().filter(|(s, ..)| self.contains(*s)).map(|(_, id, _)| *id).collect()
+    }
+
+    /// Display labels of the sources present.
+    pub fn labels(&self) -> Vec<&'static str> {
+        Self::ALL.iter().filter(|(s, ..)| self.contains(*s)).map(|(.., label)| *label).collect()
+    }
 }
 
 #[derive(Clone, Default)]
