@@ -21,9 +21,9 @@ const CONCURRENCY: usize = 64;
 const CONNECT_TIMEOUT: Duration = Duration::from_millis(800);
 /// Common ports; a SYN-ACK or RST from any of them proves the host is up.
 const TCP_PORTS: &[u16] = &[80, 443, 22, 445, 62078];
-/// UDP discard and NetBIOS name service: harmless datagrams that still
-/// require ARP resolution to send.
-const UDP_PORTS: &[u16] = &[9, 137];
+/// UDP discard: a harmless datagram that still requires ARP resolution to
+/// send. (NetBIOS on 137 gets a real query from the netbios module.)
+const UDP_PORTS: &[u16] = &[9];
 
 pub async fn run(iface: &Iface, tx: &Tx) -> anyhow::Result<()> {
     let targets = iface.sweep_targets();

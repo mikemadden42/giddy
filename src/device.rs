@@ -7,7 +7,7 @@ use std::str::FromStr;
 use std::time::Instant;
 
 use crate::oui;
-use crate::scan::{MdnsRecord, SsdpDescription, SsdpRecord};
+use crate::scan::{MdnsRecord, NetBiosRecord, SsdpDescription, SsdpRecord};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct MacAddr(pub [u8; 6]);
@@ -72,6 +72,7 @@ impl Sources {
     pub const MDNS: Sources = Sources(2);
     pub const SSDP: Sources = Sources(4);
     pub const TCP: Sources = Sources(8);
+    pub const NETBIOS: Sources = Sources(16);
 
     pub fn insert(&mut self, other: Sources) {
         self.0 |= other.0;
@@ -106,6 +107,8 @@ pub struct Device {
     pub ssdp: Option<SsdpInfo>,
     pub ssdp_types: BTreeSet<String>,
     pub rdns: Option<String>,
+    pub netbios_name: Option<String>,
+    pub workgroup: Option<String>,
     pub open_ports: BTreeSet<u16>,
     pub sources: Sources,
     pub is_self: bool,
@@ -129,6 +132,8 @@ impl Device {
             ssdp: None,
             ssdp_types: BTreeSet::new(),
             rdns: None,
+            netbios_name: None,
+            workgroup: None,
             open_ports: BTreeSet::new(),
             sources: Sources::default(),
             is_self: false,
@@ -156,6 +161,7 @@ impl Device {
             .or(self.mdns_name.as_ref().map(|(_, n)| n.as_str()))
             .or(self.ssdp.as_ref().and_then(|s| s.friendly_name.as_deref()))
             .or(self.mdns_host.as_deref())
+            .or(self.netbios_name.as_deref())
             .or(self.rdns.as_deref())
             .or(self.mdns_model.as_deref())
             .or(self.ssdp.as_ref().and_then(|s| s.model.as_deref()))
@@ -192,6 +198,18 @@ impl Device {
             if !name.is_empty() && !looks_opaque(&name) && self.mdns_name.as_ref().is_none_or(|(p, _)| prio > *p) {
                 self.mdns_name = Some((prio, name));
             }
+        }
+    }
+
+    pub fn apply_netbios(&mut self, rec: &NetBiosRecord) {
+        self.sources.insert(Sources::NETBIOS);
+        self.touch();
+        self.netbios_name = Some(rec.name.clone());
+        self.workgroup.clone_from(&rec.group);
+        if self.mac.is_none()
+            && let Some(mac) = rec.mac
+        {
+            self.set_mac(mac);
         }
     }
 
