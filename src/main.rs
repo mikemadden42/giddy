@@ -4,6 +4,7 @@ mod aliases;
 mod app;
 mod device;
 mod iface;
+mod kind;
 mod oui;
 mod scan;
 mod ui;
@@ -133,12 +134,13 @@ async fn run_once(mut app: App, mut rx: UnboundedReceiver<scan::Tagged>) -> anyh
         }
     }
     app.rebuild_view();
-    println!("{:<15}  {:<32}  {:<17}  MANUFACTURER", "IP", "NAME", "MAC");
+    println!("{:<15}  {:<10}  {:<32}  {:<17}  MANUFACTURER", "IP", "TYPE", "NAME", "MAC");
     for d in app.view.iter().filter_map(|ip| app.devices.get(ip)) {
         let name: String = d.display_name().unwrap_or("-").chars().take(32).collect();
         let mac = d.mac.map(|m| m.to_string()).unwrap_or_else(|| "-".into());
         let vendor = d.manufacturer().unwrap_or(if d.mac.is_some_and(|m| m.is_local()) { "(private)" } else { "" });
-        println!("{:<15}  {:<32}  {:<17}  {}", d.ip, name, mac, vendor);
+        let kind = kind::classify(d).map_or("-", kind::Kind::label);
+        println!("{:<15}  {:<10}  {:<32}  {:<17}  {}", d.ip, kind, name, mac, vendor);
     }
     Ok(())
 }

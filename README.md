@@ -14,6 +14,8 @@ giddy runs several unprivileged discovery methods at the same time and merges wh
 | **Service banners** | Reads what services say on connections the sweep already opened: the SSH version greeting on port 22, and the `Server` header, login realm and page title from an HTTP `GET /` on port 80. Each service is asked once per session. A login realm like `NETGEAR Orbi` often names a device that advertises nothing else. |
 | **Reverse DNS** | Asks the system resolver. Routers often know DHCP client names. |
 
+Each device also gets a best-guess **type** (router, phone, tv, printer, console…), inferred from what discovery already collected with no extra traffic. The rules check, in order: Apple hardware models (`AppleTV11,1`), advertised services (`_ipp` means a printer), UPnP device types, names (`iPhone`), open ports (62078 means an iOS device) and finally manufacturers that make only one kind of device (Nintendo). Devices that match no rule are left blank.
+
 Each MAC address is matched against the IEEE registry (MA-L, MA-M and MA-S, longest match wins) to show the manufacturer. Randomized "private" addresses, as used by modern phones, are labeled as such instead of being left blank.
 
 ## Usage
@@ -34,7 +36,7 @@ giddy --once                     # one round, print a plain-text table, exit
 | `↑` `↓` / `j` `k`, `PgUp` `PgDn`, `g` `G` | Navigate |
 | `Enter` | Toggle the details panel (services, model, UPnP info, open ports…) |
 | `/` | Filter by IP, name, MAC, manufacturer or model (`Esc` clears) |
-| `s` / `S` | Cycle the sort column / reverse it |
+| `s` / `S` | Cycle the sort column (IP, name, type, manufacturer, last seen) / reverse it |
 | `a` | Give the device an alias (stored by MAC in `~/.config/giddy/aliases`) |
 | `y` / `Y` | Copy IP / MAC to the clipboard (OSC 52, works over SSH) |
 | `i` | Switch network interface |
