@@ -54,7 +54,9 @@ pub struct SsdpDescription {
 #[derive(Debug, Clone)]
 pub struct NetBiosRecord {
     pub ip: Ipv4Addr,
-    pub name: String,
+    /// `None` when the host answered with an empty name table, as macOS
+    /// file sharing does; the reply alone still says it runs SMB.
+    pub name: Option<String>,
     pub group: Option<String>,
     pub mac: Option<MacAddr>,
 }
