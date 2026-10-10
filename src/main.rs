@@ -3,6 +3,7 @@
 mod aliases;
 mod app;
 mod device;
+mod export;
 mod iface;
 mod kind;
 mod oui;
@@ -38,9 +39,13 @@ struct Args {
     #[arg(long)]
     list_interfaces: bool,
 
-    /// Run one discovery round, print the results as text and exit
+    /// Run one discovery round, print the results and exit
     #[arg(long)]
     once: bool,
+
+    /// Output format for a single round (implies --once)
+    #[arg(long, value_enum)]
+    format: Option<export::Format>,
 }
 
 #[tokio::main]
@@ -71,8 +76,8 @@ async fn main() -> anyhow::Result<()> {
     let mut app = App::new(ifaces, idx, cfg, tx);
     oui::warm_up();
 
-    if args.once {
-        return run_once(app, rx).await;
+    if args.once || args.format.is_some() {
+        return run_once(app, rx, args.format.unwrap_or_default()).await;
     }
 
     let mut terminal = ratatui::init();
@@ -113,7 +118,7 @@ async fn run(
 }
 
 /// Headless mode: one discovery round, then a plain-text table.
-async fn run_once(mut app: App, mut rx: UnboundedReceiver<scan::Tagged>) -> anyhow::Result<()> {
+async fn run_once(mut app: App, mut rx: UnboundedReceiver<scan::Tagged>, format: export::Format) -> anyhow::Result<()> {
     let iface = app.current_iface().clone();
     eprintln!("scanning {} ({})…", iface.name, iface.cidr());
     app.start_scan();
@@ -134,13 +139,8 @@ async fn run_once(mut app: App, mut rx: UnboundedReceiver<scan::Tagged>) -> anyh
         }
     }
     app.rebuild_view();
-    println!("{:<15}  {:<10}  {:<32}  {:<17}  MANUFACTURER", "IP", "TYPE", "NAME", "MAC");
-    for d in app.view.iter().filter_map(|ip| app.devices.get(ip)) {
-        let name: String = d.display_name().unwrap_or("-").chars().take(32).collect();
-        let mac = d.mac.map(|m| m.to_string()).unwrap_or_else(|| "-".into());
-        let vendor = d.manufacturer().unwrap_or(if d.mac.is_some_and(|m| m.is_local()) { "(private)" } else { "" });
-        let kind = kind::classify(d).map_or("-", kind::Kind::label);
-        println!("{:<15}  {:<10}  {:<32}  {:<17}  {}", d.ip, kind, name, mac, vendor);
-    }
+    let devices: Vec<&device::Device> = app.view.iter().filter_map(|ip| app.devices.get(ip)).collect();
+    let mut out = std::io::stdout().lock();
+    export::write(&mut out, format, &iface, &devices)?;
     Ok(())
 }
