@@ -15,15 +15,15 @@ pub struct MacAddr(pub [u8; 6]);
 impl MacAddr {
     /// Locally administered addresses (e.g. randomized "private" Wi-Fi
     /// addresses on phones) have no registered manufacturer.
-    pub fn is_local(&self) -> bool {
+    pub fn is_local(self) -> bool {
         self.0[0] & 0x02 != 0
     }
 
-    pub fn is_zero(&self) -> bool {
+    pub fn is_zero(self) -> bool {
         self.0 == [0; 6]
     }
 
-    pub fn is_broadcast_or_multicast(&self) -> bool {
+    pub fn is_broadcast_or_multicast(self) -> bool {
         self.0[0] & 0x01 != 0
     }
 }
@@ -78,7 +78,7 @@ impl Sources {
         self.0 |= other.0;
     }
 
-    pub fn contains(&self, other: Sources) -> bool {
+    pub fn contains(self, other: Sources) -> bool {
         self.0 & other.0 == other.0
     }
 
@@ -92,12 +92,12 @@ impl Sources {
     ];
 
     /// Lowercase ids of the sources present, for export.
-    pub fn names(&self) -> Vec<&'static str> {
+    pub fn names(self) -> Vec<&'static str> {
         Self::ALL.iter().filter(|(s, ..)| self.contains(*s)).map(|(_, id, _)| *id).collect()
     }
 
     /// Display labels of the sources present.
-    pub fn labels(&self) -> Vec<&'static str> {
+    pub fn labels(self) -> Vec<&'static str> {
         Self::ALL.iter().filter(|(s, ..)| self.contains(*s)).map(|(.., label)| *label).collect()
     }
 }
@@ -173,7 +173,7 @@ impl Device {
     pub fn set_mac(&mut self, mac: MacAddr) {
         if self.mac != Some(mac) {
             self.mac = Some(mac);
-            self.vendor = oui::lookup(&mac);
+            self.vendor = oui::lookup(mac);
         }
     }
 

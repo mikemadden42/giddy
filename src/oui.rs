@@ -26,7 +26,7 @@ fn table() -> &'static Table {
         for line in text.lines() {
             let Some((hex, name)) = line.split_once('\t') else { continue };
             let Ok(prefix) = u64::from_str_radix(hex, 16) else { continue };
-            let bits = hex.len() as u32 * 4;
+            let Ok(bits) = u32::try_from(hex.len() * 4) else { continue };
             by_bits.entry(bits).or_default().insert(prefix, name.into());
         }
         let mut levels: Vec<_> = by_bits.into_iter().collect();
@@ -42,8 +42,8 @@ pub fn warm_up() {
 
 /// Look up the registered manufacturer for a MAC address, preferring the
 /// most specific (longest) assignment.
-pub fn lookup(mac: &MacAddr) -> Option<&'static str> {
-    let value = mac.0.iter().fold(0u64, |acc, b| (acc << 8) | *b as u64);
+pub fn lookup(mac: MacAddr) -> Option<&'static str> {
+    let value = mac.0.iter().fold(0u64, |acc, b| (acc << 8) | u64::from(*b));
     table().levels.iter().find_map(|(bits, map)| map.get(&(value >> (48 - bits))).map(|s| &**s))
 }
 
@@ -54,9 +54,9 @@ mod tests {
     #[test]
     fn known_vendors() {
         let apple = MacAddr([0xe0, 0x89, 0x7e, 0x72, 0x85, 0xaa]);
-        assert_eq!(lookup(&apple), Some("Apple, Inc."));
+        assert_eq!(lookup(apple), Some("Apple, Inc."));
         // MA-S block inside 00:50:C2
         let tls = MacAddr([0x00, 0x50, 0xc2, 0x00, 0x0f, 0xff]);
-        assert_eq!(lookup(&tls), Some("T.L.S. Corp."));
+        assert_eq!(lookup(tls), Some("T.L.S. Corp."));
     }
 }

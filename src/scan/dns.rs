@@ -68,13 +68,15 @@ pub struct Record {
 pub fn build_query(questions: &[(Name, u16)], unicast: bool) -> Vec<u8> {
     let mut buf = Vec::with_capacity(512);
     buf.extend_from_slice(&[0, 0, 0, 0]); // id, flags
-    buf.extend_from_slice(&(questions.len() as u16).to_be_bytes());
+    let count = u16::try_from(questions.len()).expect("callers batch questions well under 65535");
+    buf.extend_from_slice(&count.to_be_bytes());
     buf.extend_from_slice(&[0, 0, 0, 0, 0, 0]); // an, ns, ar counts
     for (name, qtype) in questions {
         for label in &name.0 {
-            let bytes = &label.as_bytes()[..label.len().min(63)];
-            buf.push(bytes.len() as u8);
-            buf.extend_from_slice(bytes);
+            // DNS labels are at most 63 bytes.
+            let len = u8::try_from(label.len()).unwrap_or(u8::MAX).min(63);
+            buf.push(len);
+            buf.extend_from_slice(&label.as_bytes()[..usize::from(len)]);
         }
         buf.push(0);
         buf.extend_from_slice(&qtype.to_be_bytes());
@@ -229,7 +231,7 @@ mod tests {
         b.extend_from_slice(b"\x05_http\x04_tcp\x05local\x00");
         b.extend_from_slice(&[0, 12, 0, 1, 0, 0, 0, 120]);
         let rdata: Vec<u8> = [&b"\x0aMy Printer"[..], &[0xc0, 12]].concat();
-        b.extend_from_slice(&(rdata.len() as u16).to_be_bytes());
+        b.extend_from_slice(&u16::try_from(rdata.len()).unwrap().to_be_bytes());
         b.extend_from_slice(&rdata);
         b.extend_from_slice(b"\x07printer");
         b.extend_from_slice(&[0xc0, 23]); // -> "local"

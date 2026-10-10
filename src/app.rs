@@ -1,6 +1,6 @@
 //! Application state and input handling.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::io::Write;
 use std::net::Ipv4Addr;
 use std::time::{Duration, Instant};
@@ -58,17 +58,15 @@ pub enum Mode {
 #[derive(Default)]
 pub struct ScanStatus {
     pub sweep: Option<(usize, usize)>,
-    pub sweeping: bool,
-    pub mdns: bool,
-    pub ssdp: bool,
-    pub netbios: bool,
+    /// Discovery tasks currently in progress.
+    pub running: BTreeSet<Task>,
     pub cycles: u32,
     pub next_at: Option<Instant>,
 }
 
 impl ScanStatus {
     pub fn busy(&self) -> bool {
-        self.sweeping || self.mdns || self.ssdp || self.netbios
+        !self.running.is_empty()
     }
 }
 
@@ -221,11 +219,10 @@ impl App {
             ScanEvent::SweepProgress { done, total } => self.status.sweep = Some((done, total)),
             ScanEvent::TaskStarted(task) | ScanEvent::TaskFinished(task) => {
                 let running = matches!(ev, ScanEvent::TaskStarted(_));
-                match task {
-                    Task::Sweep => self.status.sweeping = running,
-                    Task::Mdns => self.status.mdns = running,
-                    Task::Ssdp => self.status.ssdp = running,
-                    Task::NetBios => self.status.netbios = running,
+                if running {
+                    self.status.running.insert(task);
+                } else {
+                    self.status.running.remove(&task);
                 }
                 if running {
                     self.status.next_at = None;
@@ -241,7 +238,7 @@ impl App {
 
     fn apply_alias(&mut self, ip: Ipv4Addr) {
         if let Some(dev) = self.devices.get_mut(&ip) {
-            dev.alias = dev.mac.and_then(|m| self.aliases.get(&m).cloned());
+            dev.alias = dev.mac.and_then(|m| self.aliases.get(m).cloned());
         }
     }
 
@@ -273,17 +270,20 @@ impl App {
     }
 
     fn move_selection(&mut self, delta: isize) {
-        if self.view.is_empty() {
-            return;
-        }
-        let cur = self.table.selected().unwrap_or(0) as isize;
-        let idx = (cur + delta).clamp(0, self.view.len() as isize - 1) as usize;
+        let cur = self.table.selected().unwrap_or(0);
+        self.select(cur.saturating_add_signed(delta));
+    }
+
+    /// Select row `idx` (clamped to the list) and pin that device.
+    fn select(&mut self, idx: usize) {
+        let Some(last) = self.view.len().checked_sub(1) else { return };
+        let idx = idx.min(last);
         self.table.select(Some(idx));
         self.pinned = Some(self.view[idx]);
     }
 
-    pub fn on_terminal_event(&mut self, ev: Event) {
-        let Event::Key(key) = ev else { return };
+    pub fn on_terminal_event(&mut self, ev: &Event) {
+        let &Event::Key(key) = ev else { return };
         if key.kind != KeyEventKind::Press {
             return;
         }
@@ -317,7 +317,7 @@ impl App {
                     input.pop();
                 }
                 KeyCode::Char(c) if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
-                    input.push(c)
+                    input.push(c);
                 }
                 KeyCode::Enter => {
                     let input = std::mem::take(input);
@@ -355,8 +355,8 @@ impl App {
             KeyCode::PageUp => self.move_selection(-page),
             KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => self.move_selection(page),
             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => self.move_selection(-page),
-            KeyCode::Home | KeyCode::Char('g') => self.move_selection(isize::MIN / 2),
-            KeyCode::End | KeyCode::Char('G') => self.move_selection(isize::MAX / 2),
+            KeyCode::Home | KeyCode::Char('g') => self.select(0),
+            KeyCode::End | KeyCode::Char('G') => self.select(usize::MAX),
             KeyCode::Enter | KeyCode::Char(' ') => self.details = !self.details,
             KeyCode::Char('/') => self.mode = Mode::Filter,
             KeyCode::Char('s') => {
@@ -381,12 +381,12 @@ impl App {
             },
             KeyCode::Char('y') => {
                 if let Some(ip) = self.selected_device().map(|d| d.ip) {
-                    self.copy(ip.to_string());
+                    self.copy(&ip.to_string());
                 }
             }
             KeyCode::Char('Y') => {
                 if let Some(mac) = self.selected_device().and_then(|d| d.mac) {
-                    self.copy(mac.to_string());
+                    self.copy(&mac.to_string());
                 }
             }
             KeyCode::Char('?') => self.mode = Mode::Help,
@@ -410,10 +410,10 @@ impl App {
 
     /// Copy to the system clipboard via the OSC 52 terminal escape, which
     /// works locally and over SSH in most modern terminals.
-    fn copy(&mut self, text: String) {
+    fn copy(&mut self, text: &str) {
         let seq = format!("\x1b]52;c;{}\x07", base64(text.as_bytes()));
         let mut out = std::io::stdout();
-        let _ = out.write_all(seq.as_bytes()).and_then(|_| out.flush());
+        let _ = out.write_all(seq.as_bytes()).and_then(|()| out.flush());
         self.toast(format!("Copied {text}"));
     }
 }
@@ -458,7 +458,7 @@ fn base64(data: &[u8]) -> String {
     let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
     for chunk in data.chunks(3) {
         let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
-        let n = (b[0] as u32) << 16 | (b[1] as u32) << 8 | b[2] as u32;
+        let n = u32::from(b[0]) << 16 | u32::from(b[1]) << 8 | u32::from(b[2]);
         for i in 0..4 {
             if i <= chunk.len() {
                 out.push(ALPHABET[(n >> (18 - 6 * i) & 63) as usize] as char);

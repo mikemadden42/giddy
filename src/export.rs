@@ -6,7 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use clap::ValueEnum;
 use serde::Serialize;
 
-use crate::device::{Device, describe_service};
+use crate::device::{Device, MacAddr, describe_service};
 use crate::iface::Iface;
 use crate::kind;
 
@@ -34,7 +34,7 @@ fn table(out: &mut impl Write, devices: &[&Device]) -> io::Result<()> {
     for d in devices {
         let name: String = d.display_name().unwrap_or("-").chars().take(32).collect();
         let mac = d.mac.map_or_else(|| "-".into(), |m| m.to_string());
-        let vendor = d.manufacturer().unwrap_or(if d.mac.is_some_and(|m| m.is_local()) { "(private)" } else { "" });
+        let vendor = d.manufacturer().unwrap_or(if d.mac.is_some_and(MacAddr::is_local) { "(private)" } else { "" });
         let kind = kind::classify(d).map_or("-", kind::Kind::label);
         writeln!(out, "{:<15}  {:<10}  {:<32}  {:<17}  {}", d.ip, kind, name, mac, vendor)?;
     }
@@ -108,7 +108,7 @@ impl<'a> DeviceJson<'a> {
         DeviceJson {
             ip: d.ip.to_string(),
             mac: d.mac.map(|m| m.to_string()),
-            randomized_mac: d.mac.is_some_and(|m| m.is_local()),
+            randomized_mac: d.mac.is_some_and(MacAddr::is_local),
             name: d.display_name(),
             alias: d.alias.as_deref(),
             kind: kind::classify(d).map(kind::Kind::label),
@@ -175,7 +175,7 @@ const CSV_HEADER: &[&str] = &[
 ];
 
 fn csv(out: &mut impl Write, devices: &[&Device]) -> io::Result<()> {
-    write_csv_row(out, CSV_HEADER.iter().map(|s| s.to_string()))?;
+    write_csv_row(out, CSV_HEADER.iter().map(ToString::to_string))?;
     for d in devices {
         let ports: Vec<String> = d.open_ports.iter().map(u16::to_string).collect();
         let text = |s: Option<&str>| s.unwrap_or_default().to_string();
@@ -186,7 +186,7 @@ fn csv(out: &mut impl Write, devices: &[&Device]) -> io::Result<()> {
                 text(kind::classify(d).map(kind::Kind::label)),
                 text(d.display_name()),
                 d.mac.map(|m| m.to_string()).unwrap_or_default(),
-                d.mac.is_some_and(|m| m.is_local()).to_string(),
+                d.mac.is_some_and(MacAddr::is_local).to_string(),
                 text(d.manufacturer()),
                 text(d.model()),
                 text(d.mdns_host.as_deref()),
@@ -217,7 +217,7 @@ fn csv_field(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::device::{MacAddr, Sources};
+    use crate::device::Sources;
 
     fn sample() -> (Iface, Device) {
         let iface = Iface { name: "eth0".into(), ip: [10, 0, 0, 2].into(), prefix: 24, mac: None, gateway: None };
