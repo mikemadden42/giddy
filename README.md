@@ -10,6 +10,7 @@ giddy runs several unprivileged discovery methods at the same time and merges wh
 | **ARP cache** | Reads the kernel neighbor table (`ip neigh` / `/proc/net/arp` on Linux, `arp -an` on macOS/BSD, `arp -a` on Windows) once a second to map IPs to MAC addresses. |
 | **mDNS / DNS-SD** | Sends queries from an ephemeral port ("legacy unicast", RFC 6762 §6.7), so responders reply directly without needing port 5353. It also joins 5353 alongside avahi/mDNSResponder when the OS allows, to hear announcements. Collects hostnames, friendly instance names (e.g. *iPhone*), services and models. |
 | **SSDP / UPnP** | Sends `M-SEARCH` and fetches each device's description XML for its friendly name, manufacturer and model. Fetches are limited to addresses on the local subnet. |
+| **NetBIOS** | After the sweep, sends a node-status query (UDP 137) to each host in the ARP cache. Windows PCs, Samba servers and NAS boxes reply with their hostname and workgroup. |
 | **Reverse DNS** | Asks the system resolver. Routers often know DHCP client names. |
 
 Each MAC address is matched against the IEEE registry (MA-L, MA-M and MA-S, longest match wins) to show the manufacturer. Randomized "private" addresses, as used by modern phones, are labeled as such instead of being left blank.
@@ -40,7 +41,7 @@ giddy --once                     # one round, print a plain-text table, exit
 | `?` | Help |
 | `q` | Quit |
 
-The **Via** column shows which methods saw each device: **A**RP, **M**DNS, **U**PnP/SSDP, **T**CP. Rows that haven't been seen recently are dimmed.
+The **Via** column shows which methods saw each device: **A**RP, **M**DNS, **U**PnP/SSDP, **T**CP, **N**etBIOS. Rows that haven't been seen recently are dimmed.
 
 ## Notes
 

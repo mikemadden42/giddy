@@ -5,6 +5,7 @@
 mod arp;
 mod dns;
 mod mdns;
+mod netbios;
 mod rdns;
 mod ssdp;
 mod sweep;
@@ -47,11 +48,20 @@ pub struct SsdpDescription {
     pub model: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct NetBiosRecord {
+    pub ip: Ipv4Addr,
+    pub name: String,
+    pub group: Option<String>,
+    pub mac: Option<MacAddr>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Task {
     Sweep,
     Mdns,
     Ssdp,
+    NetBios,
 }
 
 #[derive(Debug, Clone)]
@@ -71,6 +81,7 @@ pub enum ScanEvent {
     Mdns(MdnsRecord),
     Ssdp(SsdpRecord),
     SsdpDescription(SsdpDescription),
+    NetBios(NetBiosRecord),
     ReverseDns {
         ip: Ipv4Addr,
         name: String,
@@ -120,14 +131,16 @@ pub async fn run(iface: Iface, cfg: Config, generation: u64, out: UnboundedSende
 
     let mut ssdp_state = ssdp::State::default();
     loop {
-        let sweep = async {
+        // NetBIOS asks only hosts with ARP entries, so it follows the sweep.
+        let sweep_then_netbios = async {
             if cfg.sweep {
                 tracked(&tx, Task::Sweep, sweep::run(&iface, &tx)).await;
             }
+            tracked(&tx, Task::NetBios, netbios::query(&iface, &tx)).await;
         };
         let mdns = tracked(&tx, Task::Mdns, mdns::query(&iface, &tx));
         let ssdp = tracked(&tx, Task::Ssdp, ssdp::search(&iface, &tx, &mut ssdp_state));
-        tokio::join!(sweep, mdns, ssdp);
+        tokio::join!(sweep_then_netbios, mdns, ssdp);
         let _ = tx.send(ScanEvent::CycleFinished { next_in: cfg.interval });
         tokio::time::sleep(cfg.interval).await;
     }
