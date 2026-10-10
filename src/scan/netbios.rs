@@ -159,13 +159,13 @@ mod tests {
         let mut b = vec![0x67, 0x64, 0x84, 0x00, 0, 0, 0, 1, 0, 0, 0, 0];
         b.extend_from_slice(&encode_name(b"*"));
         b.extend_from_slice(&[0, 0x21, 0, 1, 0, 0, 0, 0]);
-        let mut rdata = vec![entries.len() as u8];
+        let mut rdata = vec![u8::try_from(entries.len()).unwrap()];
         for e in entries {
             rdata.extend_from_slice(e);
         }
         rdata.extend_from_slice(&mac);
         rdata.extend_from_slice(&[0; 40]); // remaining statistics
-        b.extend_from_slice(&(rdata.len() as u16).to_be_bytes());
+        b.extend_from_slice(&u16::try_from(rdata.len()).unwrap().to_be_bytes());
         b.extend_from_slice(&rdata);
         b
     }

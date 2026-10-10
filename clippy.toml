@@ -1,0 +1,2 @@
+# Protocol and product names that aren't code identifiers ("..": keep the defaults).
+doc-valid-idents = ["NetBIOS", "UPnP", ".."]

@@ -2,6 +2,7 @@
 //! `$XDG_CONFIG_HOME/giddy/aliases` (one `mac<TAB>alias` per line).
 
 use std::collections::HashMap;
+use std::fmt::Write;
 use std::path::PathBuf;
 
 use crate::device::MacAddr;
@@ -40,8 +41,8 @@ impl Aliases {
         Aliases { path, map }
     }
 
-    pub fn get(&self, mac: &MacAddr) -> Option<&String> {
-        self.map.get(mac)
+    pub fn get(&self, mac: MacAddr) -> Option<&String> {
+        self.map.get(&mac)
     }
 
     /// Set (or clear, when empty) an alias and save.
@@ -62,7 +63,10 @@ impl Aliases {
         }
         let mut entries: Vec<_> = self.map.iter().collect();
         entries.sort();
-        let text: String = entries.iter().map(|(m, a)| format!("{m}\t{a}\n")).collect();
+        let mut text = String::new();
+        for (mac, alias) in entries {
+            let _ = writeln!(text, "{mac}\t{alias}");
+        }
         std::fs::write(path, text)
     }
 }

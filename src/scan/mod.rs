@@ -61,7 +61,7 @@ pub struct NetBiosRecord {
     pub mac: Option<MacAddr>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Task {
     Sweep,
     Mdns,
@@ -178,7 +178,7 @@ fn query_socket(iface: &Iface) -> anyhow::Result<UdpSocket> {
 
 /// Best-effort shared listener on a well-known multicast group/port, so we
 /// also hear unsolicited announcements. Coexists with system daemons (avahi,
-/// mDNSResponder) via SO_REUSEADDR/SO_REUSEPORT; failure is not fatal.
+/// mDNSResponder) via `SO_REUSEADDR`/`SO_REUSEPORT`; failure is not fatal.
 fn group_socket(iface: &Iface, group: Ipv4Addr, port: u16) -> anyhow::Result<UdpSocket> {
     let sock = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
     sock.set_reuse_address(true)?;
