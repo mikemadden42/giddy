@@ -2,6 +2,12 @@
 name = "giddy"
 version = "0.1.0"
 edition = "2024"
+description = "Terminal UI that discovers devices on your local network without elevated privileges"
+license = "MIT"
+repository = "https://github.com/mikemadden42/giddy"
+readme = "README.md"
+keywords = ["network", "discovery", "mdns", "tui", "lan"]
+categories = ["command-line-utilities", "network-programming"]
 
 [dependencies]
 anyhow = "1.0.104"
@@ -24,3 +30,8 @@ libc = "0.2.190"
 # Enforced in CI (warnings are errors there). Priority -1 lets individual
 # lints be overridden below the group if ever needed.
 pedantic = { level = "warn", priority = -1 }
+cargo = { level = "warn", priority = -1 }
+# The duplicates come from inside ratatui/crossterm (hashbrown, syn 2 vs 3)
+# or from ratatui's optional termwiz backend, which is never built. Nothing
+# giddy can change, and dependency updates would break CI at random.
+multiple_crate_versions = "allow"
