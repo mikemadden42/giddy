@@ -160,7 +160,7 @@ fn from_names(d: &Device) -> Option<Kind> {
     }
     let words: Vec<&str> = text.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).collect();
     // Short keywords must be whole words; longer ones may be part of one
-    // (e.g. "iphone" in "iphone").
+    // (e.g. "iphone" in "guest-iphone").
     let matches = |kw: &str| if kw.len() <= 4 { words.contains(&kw) } else { text.contains(kw) };
     let table: &[(&[&str], Kind)] = &[
         (&["iphone", "android", "galaxy", "pixel"], Kind::Phone),
@@ -250,9 +250,9 @@ mod tests {
     #[test]
     fn name_keywords() {
         let mut d = device();
-        d.mdns_host = Some("iPhone".into());
+        d.mdns_host = Some("Guest-iPhone".into());
         assert_eq!(classify(&d), Some(Kind::Phone));
-        d.mdns_host = Some("iPad".into());
+        d.mdns_host = Some("Kitchen-iPad".into());
         assert_eq!(classify(&d), Some(Kind::Tablet));
         // "tv" must be a whole word, not part of "tvheadend"-style names.
         d.mdns_host = Some("tvheadend".into());

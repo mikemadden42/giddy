@@ -365,11 +365,22 @@ pub fn is_useful_label(s: &str) -> bool {
 }
 
 /// True for machine-generated identifiers (UUIDs, long hex hashes, MACs)
-/// that make poor display names.
+/// that make poor display names, including names with a UUID embedded,
+/// like Android's `nearby-presence-nsd-<uuid>`.
 pub fn looks_opaque(name: &str) -> bool {
     let core: String = name.chars().filter(|c| !matches!(c, '-' | ':' | '_')).collect();
     let hex = core.chars().all(|c| c.is_ascii_hexdigit());
-    (hex && core.len() >= 12) || core.is_empty()
+    (hex && core.len() >= 12) || core.is_empty() || contains_uuid(name)
+}
+
+/// True if `s` contains a UUID in its usual 8-4-4-4-12 hex form.
+fn contains_uuid(s: &str) -> bool {
+    s.as_bytes().windows(36).any(|w| {
+        w.iter().enumerate().all(|(i, b)| match i {
+            8 | 13 | 18 | 23 => *b == b'-',
+            _ => b.is_ascii_hexdigit(),
+        })
+    })
 }
 
 /// Human-friendly label for an mDNS service type.
@@ -419,17 +430,20 @@ mod tests {
         assert_eq!(mac.to_string(), "3c:37:86:00:00:01");
         let mac: MacAddr = "0:1b:2:3:4:5".parse().unwrap();
         assert_eq!(mac.to_string(), "00:1b:02:03:04:05");
-        assert!("3c:37:86:18:ee".parse::<MacAddr>().is_err());
+        assert!("3c:37:86:00:00".parse::<MacAddr>().is_err());
         assert!("3c:37:86:00:00:01:00".parse::<MacAddr>().is_err());
-        assert!("e2:08:82:3b:b5:97".parse::<MacAddr>().unwrap().is_local());
+        assert!("02:00:00:00:00:01".parse::<MacAddr>().unwrap().is_local());
     }
 
     #[test]
     fn opaque_names() {
-        assert!(looks_opaque("4239E8DA-93AD-4EEF-99DF-6384C0000000"));
-        assert!(looks_opaque("921b12e49332d6ff252118bee27b8"));
+        assert!(looks_opaque("01234567-89AB-CDEF-0123-456789ABCDEF"));
+        assert!(looks_opaque("0123456789abcdef0123456789abc"));
         assert!(!looks_opaque("Bedroom"));
         assert!(!looks_opaque("cafe"));
+        assert!(looks_opaque("nearby-presence-nsd-00000000-1111-2222-3333-444444444444"));
+        assert!(!looks_opaque("Office-Laptop"));
+        assert!(!looks_opaque("Kitchen-iPhone-17"));
     }
 
     #[test]
@@ -446,6 +460,6 @@ mod tests {
     fn instance_cleanup() {
         assert_eq!(clean_instance_name("A1B2C3D4E5F6@Living Room"), "Living Room");
         assert_eq!(clean_instance_name("nas [00:11:22:33:44:55]"), "nas");
-        assert_eq!(clean_instance_name("iPad"), "iPad");
+        assert_eq!(clean_instance_name("Guest's iPad"), "Guest's iPad");
     }
 }
