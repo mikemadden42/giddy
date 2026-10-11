@@ -11,7 +11,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio::task::JoinHandle;
 
 use crate::aliases::Aliases;
-use crate::device::{Device, Sources};
+use crate::device::{Device, MacAddr, Sources};
 use crate::iface::Iface;
 use crate::kind;
 use crate::scan::{self, ScanEvent, Tagged, Task};
@@ -122,6 +122,11 @@ impl App {
         }
     }
 
+    /// How long a device can go unseen before its row is dimmed.
+    pub fn stale_after(&self) -> Duration {
+        (self.cfg.interval * 3).max(Duration::from_secs(90))
+    }
+
     pub fn current_iface(&self) -> &Iface {
         &self.ifaces[self.iface]
     }
@@ -191,6 +196,7 @@ impl App {
         if generation != self.generation {
             return;
         }
+        let stale_after = self.stale_after();
         let iface = &self.ifaces[self.iface];
         let devices = &mut self.devices;
         match ev {
@@ -201,6 +207,9 @@ impl App {
                 dev.set_mac(mac);
                 if active || new {
                     dev.touch();
+                    for old in superseded(devices, ip, mac, stale_after) {
+                        devices.remove(&old);
+                    }
                 }
                 self.apply_alias(ip);
             }
@@ -427,6 +436,19 @@ fn device_entry<'a>(devices: &'a mut HashMap<Ipv4Addr, Device>, iface: &Iface, i
     })
 }
 
+/// Rows left behind when a device moves to a new address (e.g. a phone that
+/// rejoins Wi-Fi and gets a new DHCP lease): other IPs with the same MAC that
+/// have already gone stale. Live ones are kept, since a router can legitimately
+/// answer for several addresses.
+fn superseded(devices: &HashMap<Ipv4Addr, Device>, ip: Ipv4Addr, mac: MacAddr, stale_after: Duration) -> Vec<Ipv4Addr> {
+    devices
+        .values()
+        .filter(|d| d.ip != ip && d.mac == Some(mac) && !d.is_self && !d.is_gateway)
+        .filter(|d| d.last_seen.elapsed() > stale_after)
+        .map(|d| d.ip)
+        .collect()
+}
+
 fn matches_filter(d: &Device, needle: &str) -> bool {
     let mac = d.mac.map(|m| m.to_string());
     [
@@ -472,6 +494,34 @@ fn base64(data: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+    use std::net::Ipv4Addr;
+    use std::time::{Duration, Instant};
+
+    use crate::device::{Device, MacAddr};
+
+    #[test]
+    fn superseded_drops_only_stale_rows_with_same_mac() {
+        let mac = MacAddr([0x02, 0, 0, 0, 0, 0x01]);
+        let other = MacAddr([0x02, 0, 0, 0, 0, 0x02]);
+        let long_ago = Instant::now().checked_sub(Duration::from_secs(3600)).unwrap();
+        let mut devices = HashMap::new();
+        let mut add = |last: u8, mac: MacAddr, seen: Instant| {
+            let ip = Ipv4Addr::new(10, 0, 0, last);
+            let mut d = Device::new(ip);
+            d.mac = Some(mac);
+            d.last_seen = seen;
+            devices.insert(ip, d);
+        };
+        add(110, mac, Instant::now()); // the device's current address
+        add(104, mac, long_ago); // old lease: dropped
+        add(107, mac, Instant::now()); // still live: kept
+        add(101, other, long_ago); // different device: kept
+        let mut old = super::superseded(&devices, Ipv4Addr::new(10, 0, 0, 110), mac, Duration::from_secs(90));
+        old.sort();
+        assert_eq!(old, [Ipv4Addr::new(10, 0, 0, 104)]);
+    }
+
     #[test]
     fn base64_matches_reference() {
         assert_eq!(super::base64(b""), "");

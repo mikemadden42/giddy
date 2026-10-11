@@ -182,7 +182,7 @@ fn draw_table(f: &mut Frame, app: &mut App, area: Rect) {
     header.push("Seen");
     widths.push(Constraint::Length(5));
 
-    let stale_after = (app.cfg.interval * 3).max(Duration::from_secs(90));
+    let stale_after = app.stale_after();
     let rows = app.view.iter().filter_map(|ip| app.devices.get(ip)).map(|d| {
         let stale = d.last_seen.elapsed() > stale_after;
         let mut cells = vec![Cell::from(d.ip.to_string())];
