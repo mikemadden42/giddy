@@ -138,7 +138,7 @@ fn run(cmd: &str, args: &[&str]) -> Option<String> {
     out.status.success().then(|| String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-/// `10.0.0.1 lladdr 3c:37:86:18:ee:a3 router REACHABLE`
+/// `10.0.0.1 lladdr 3c:37:86:00:00:01 router REACHABLE`
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn parse_ip_neigh(text: &str) -> Vec<Entry> {
     text.lines()
@@ -176,7 +176,7 @@ fn parse_proc_arp(text: &str, dev: &str) -> Vec<Entry> {
         .collect()
 }
 
-/// `? (10.0.0.1) at 3c:37:86:18:ee:a3 on en0 ifscope [ethernet]`
+/// `? (10.0.0.1) at 3c:37:86:00:00:01 on en0 ifscope [ethernet]`
 #[cfg_attr(any(target_os = "linux", target_os = "macos", windows), allow(dead_code))]
 fn parse_bsd_arp(text: &str, dev: &str) -> Vec<Entry> {
     text.lines()
@@ -191,7 +191,7 @@ fn parse_bsd_arp(text: &str, dev: &str) -> Vec<Entry> {
         .collect()
 }
 
-/// `  10.0.0.1          3c-37-86-18-ee-a3     dynamic`
+/// `  10.0.0.1          3c-37-86-00-00-01     dynamic`
 #[cfg_attr(not(windows), allow(dead_code))]
 fn parse_windows_arp(text: &str) -> Vec<Entry> {
     text.lines()
@@ -210,22 +210,22 @@ mod tests {
 
     #[test]
     fn ip_neigh() {
-        let text = "10.0.0.1 lladdr 3c:37:86:18:ee:a3 router REACHABLE\n\
-                    10.0.0.5 lladdr 70:f0:88:bc:fb:36 STALE\n\
+        let text = "10.0.0.1 lladdr 3c:37:86:00:00:01 router REACHABLE\n\
+                    10.0.0.5 lladdr 70:f0:88:00:00:03 STALE\n\
                     10.0.0.9  FAILED\n\
                     10.0.0.10 INCOMPLETE\n";
         let e = parse_ip_neigh(text);
         assert_eq!(e.len(), 2);
         assert!(e[0].active && !e[1].active);
-        assert_eq!(e[1].mac.to_string(), "70:f0:88:bc:fb:36");
+        assert_eq!(e[1].mac.to_string(), "70:f0:88:00:00:03");
     }
 
     #[test]
     fn proc_arp() {
         let text = "IP address       HW type     Flags       HW address            Mask     Device\n\
-                    10.0.0.38        0x1         0x2         28:ec:95:73:21:98     *        eth0\n\
+                    10.0.0.38        0x1         0x2         28:ec:95:00:00:04     *        eth0\n\
                     10.0.0.39        0x1         0x0         00:00:00:00:00:00     *        eth0\n\
-                    10.0.0.40        0x1         0x2         28:ec:95:73:21:99     *        wlan0\n";
+                    10.0.0.40        0x1         0x2         28:ec:95:00:00:05     *        wlan0\n";
         let e = parse_proc_arp(text, "eth0");
         assert_eq!(e.len(), 1);
         assert_eq!(e[0].ip, Ipv4Addr::new(10, 0, 0, 38));
@@ -248,26 +248,26 @@ mod tests {
             m
         }
         let buf = [
-            msg(4, [10, 0, 0, 1], Some([0x3c, 0x37, 0x86, 0x18, 0xee, 0xa3])),
+            msg(4, [10, 0, 0, 1], Some([0x3c, 0x37, 0x86, 0x00, 0x00, 0x01])),
             msg(4, [10, 0, 0, 2], None),
-            msg(7, [10, 0, 0, 3], Some([0x3c, 0x37, 0x86, 0x19, 0x81, 0xc1])),
+            msg(7, [10, 0, 0, 3], Some([0x3c, 0x37, 0x86, 0x00, 0x00, 0x02])),
             msg(4, [10, 0, 0, 255], Some([0xff; 6])),
         ]
         .concat();
         let e = parse_rt_msgs(&buf, 4);
         assert_eq!(e.len(), 1);
         assert_eq!(e[0].ip, Ipv4Addr::new(10, 0, 0, 1));
-        assert_eq!(e[0].mac.to_string(), "3c:37:86:18:ee:a3");
+        assert_eq!(e[0].mac.to_string(), "3c:37:86:00:00:01");
     }
 
     #[test]
     fn bsd_and_windows_arp() {
-        let bsd = "? (10.0.0.1) at 3c:37:86:18:ee:a3 on en0 ifscope [ethernet]\n\
+        let bsd = "? (10.0.0.1) at 3c:37:86:00:00:01 on en0 ifscope [ethernet]\n\
                    ? (10.0.0.2) at (incomplete) on en0 ifscope [ethernet]\n\
                    ? (224.0.0.251) at 1:0:5e:0:0:fb on en0 ifscope permanent [ethernet]\n";
         assert_eq!(parse_bsd_arp(bsd, "en0").len(), 1);
         let win = "Interface: 10.0.0.5 --- 0x7\n  Internet Address      Physical Address      Type\n  \
-                   10.0.0.1              3c-37-86-18-ee-a3     dynamic\n  \
+                   10.0.0.1              3c-37-86-00-00-01     dynamic\n  \
                    10.0.0.255            ff-ff-ff-ff-ff-ff     static\n";
         assert_eq!(parse_windows_arp(win).len(), 1);
     }
