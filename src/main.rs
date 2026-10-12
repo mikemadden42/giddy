@@ -40,6 +40,11 @@ struct Args {
     #[arg(long, default_value_t = 500, value_parser = clap::value_parser!(u32).range(1..=100_000))]
     rate: u32,
 
+    /// Sweep this range (e.g. 172.16.0.0/16) instead of the /22 around your
+    /// address; must be on the interface's subnet, at most a /16
+    #[arg(long, value_name = "CIDR", conflicts_with = "no_sweep")]
+    sweep: Option<iface::Cidr>,
+
     /// List usable interfaces and exit
     #[arg(long)]
     list_interfaces: bool,
@@ -76,7 +81,18 @@ async fn main() -> anyhow::Result<()> {
         None => iface::default_index(&ifaces).unwrap_or(0),
     };
 
-    let cfg = scan::Config { interval: Duration::from_secs(args.interval), sweep: !args.no_sweep, rate: args.rate };
+    if let Some(range) = args.sweep
+        && !ifaces[idx].covers(range)
+    {
+        bail!("--sweep {range} is not within {} ({})", ifaces[idx].name, ifaces[idx].cidr());
+    }
+
+    let cfg = scan::Config {
+        interval: Duration::from_secs(args.interval),
+        sweep: !args.no_sweep,
+        rate: args.rate,
+        range: args.sweep,
+    };
     let (tx, rx) = mpsc::unbounded_channel();
     let mut app = App::new(ifaces, idx, cfg, tx);
     oui::warm_up();
