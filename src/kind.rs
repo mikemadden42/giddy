@@ -271,18 +271,18 @@ mod tests {
     #[test]
     fn ports_and_vendor_fallbacks() {
         let mut d = device();
-        d.set_mac(MacAddr([0x4e, 0x9e, 0x78, 0xfd, 0x62, 0x82])); // randomized
+        d.set_mac(MacAddr([0x4e, 0x9e, 0x78, 0x00, 0x00, 0x07])); // randomized
         assert_eq!(classify(&d), None);
         d.open_ports.insert(62078);
         assert_eq!(classify(&d), Some(Kind::Mobile));
 
         let mut d = device();
-        d.set_mac(MacAddr([0x70, 0xf0, 0x88, 0xbc, 0xfb, 0x36])); // Nintendo
+        d.set_mac(MacAddr([0x70, 0xf0, 0x88, 0x00, 0x00, 0x03])); // Nintendo
         assert_eq!(classify(&d), Some(Kind::Console));
 
         // An Apple device answering NetBIOS is a Mac with file sharing on.
         let mut d = device();
-        d.set_mac(MacAddr([0x50, 0xa6, 0xd8, 0xc3, 0x41, 0xef]));
+        d.set_mac(MacAddr([0x50, 0xa6, 0xd8, 0x00, 0x00, 0x08]));
         assert_eq!(classify(&d), None);
         d.sources.insert(Sources::NETBIOS);
         assert_eq!(classify(&d), Some(Kind::Computer));
@@ -291,7 +291,7 @@ mod tests {
     #[test]
     fn amazon_spotify_is_an_echo() {
         let mut d = device();
-        d.set_mac(MacAddr([0x08, 0x7c, 0x39, 0xf4, 0x05, 0x78])); // Amazon
+        d.set_mac(MacAddr([0x08, 0x7c, 0x39, 0x00, 0x00, 0x09])); // Amazon
         assert_eq!(classify(&d), None);
         d.services.insert("_spotify-connect._tcp".into(), "SpotifyConnect".into());
         assert_eq!(classify(&d), Some(Kind::Speaker));
