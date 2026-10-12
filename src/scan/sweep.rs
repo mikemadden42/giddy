@@ -1,7 +1,8 @@
-//! Subnet sweep: poke every address with ordinary UDP datagrams and TCP
-//! connection attempts. To send anything on the local link the kernel must
-//! first resolve the target's MAC via ARP, so this fills the neighbor cache
-//! for every live host — no raw sockets or root needed.
+//! Subnet sweep, in two phases. First a single UDP datagram to every
+//! address: to send anything on the local link the kernel must resolve the
+//! target's MAC via ARP, so this fills the neighbor cache for every live
+//! host, with no raw sockets or root needed. Then TCP connection attempts,
+//! only to the hosts that answered ARP, to learn open ports and banners.
 
 use std::collections::HashSet;
 use std::net::{Ipv4Addr, SocketAddrV4};
@@ -23,6 +24,10 @@ use crate::iface::Iface;
 /// packet rate is limited separately by [`Pacer`], since hosts that refuse
 /// instantly would otherwise free slots fast enough to burst.
 const CONCURRENCY: usize = 64;
+/// How long to wait after the last datagram for ARP replies to arrive.
+const ARP_SETTLE: Duration = Duration::from_millis(1500);
+/// Report phase-one progress every this many addresses, not every one.
+const PROGRESS_EVERY: usize = 32;
 /// Back-pressure never slows the sweep below this many packets per second.
 const MIN_RATE: u32 = 10;
 const CONNECT_TIMEOUT: Duration = Duration::from_millis(800);
@@ -115,20 +120,42 @@ fn is_backpressure(e: &std::io::Error) -> bool {
 
 pub async fn run(iface: &Iface, tx: &Tx, state: &Arc<State>, rate: u32) -> anyhow::Result<()> {
     let targets = iface.sweep_targets();
-    let total = targets.len();
     let src = iface.ip;
-    let udp = Arc::new(UdpSocket::bind(SocketAddrV4::new(src, 0)).await?);
-    let permits = Arc::new(Semaphore::new(CONCURRENCY));
+    let udp = UdpSocket::bind(SocketAddrV4::new(src, 0)).await?;
     let pacer = Arc::new(Pacer::new(rate));
-    let done = Arc::new(AtomicUsize::new(0));
+    let total = targets.len();
     let _ = tx.send(ScanEvent::SweepProgress { done: 0, total });
 
+    // Phase 1: one datagram per address, only to make the kernel ARP for it.
+    for (i, &ip) in targets.iter().enumerate() {
+        for port in UDP_PORTS {
+            pacer.wait().await;
+            if let Err(e) = udp.send_to(&[0], SocketAddrV4::new(ip, *port)).await {
+                pacer.on_error(&e, tx);
+            }
+        }
+        if (i + 1) % PROGRESS_EVERY == 0 {
+            let _ = tx.send(ScanEvent::SweepProgress { done: i + 1, total });
+        }
+    }
+    tokio::time::sleep(ARP_SETTLE).await;
+
+    // Phase 2: TCP only to hosts that answered ARP. Where the neighbor table
+    // can't be read (macOS without the signed bundle ID), probe everything.
+    let mut hosts = resolved(iface, &targets).await;
+    if hosts.is_empty() {
+        hosts = targets;
+    }
+    let total = total + hosts.len();
+    let done = Arc::new(AtomicUsize::new(total - hosts.len()));
+    let _ = tx.send(ScanEvent::SweepProgress { done: done.load(Ordering::Relaxed), total });
+    let permits = Arc::new(Semaphore::new(CONCURRENCY));
     let mut tasks = JoinSet::new();
-    for ip in targets {
+    for ip in hosts {
         let permit = permits.clone().acquire_owned().await?;
-        let (udp, tx, done, state, pacer) = (udp.clone(), tx.clone(), done.clone(), state.clone(), pacer.clone());
+        let (tx, done, state, pacer) = (tx.clone(), done.clone(), state.clone(), pacer.clone());
         tasks.spawn(async move {
-            probe(src, ip, &udp, &tx, &state, &pacer).await;
+            probe_tcp(src, ip, &tx, &state, &pacer).await;
             drop(permit);
             let done = done.fetch_add(1, Ordering::Relaxed) + 1;
             let _ = tx.send(ScanEvent::SweepProgress { done, total });
@@ -138,13 +165,15 @@ pub async fn run(iface: &Iface, tx: &Tx, state: &Arc<State>, rate: u32) -> anyho
     Ok(())
 }
 
-async fn probe(src: Ipv4Addr, ip: Ipv4Addr, udp: &UdpSocket, tx: &Tx, state: &State, pacer: &Pacer) {
-    for port in UDP_PORTS {
-        pacer.wait().await;
-        if let Err(e) = udp.send_to(&[0], SocketAddrV4::new(ip, *port)).await {
-            pacer.on_error(&e, tx);
-        }
-    }
+/// The targets that now have a MAC address in the neighbor table, in order.
+async fn resolved(iface: &Iface, targets: &[Ipv4Addr]) -> Vec<Ipv4Addr> {
+    let name = iface.name.clone();
+    let entries = tokio::task::spawn_blocking(move || super::arp::read(&name)).await.unwrap_or_default();
+    let known: HashSet<Ipv4Addr> = entries.into_iter().map(|e| e.ip).collect();
+    targets.iter().copied().filter(|ip| known.contains(ip)).collect()
+}
+
+async fn probe_tcp(src: Ipv4Addr, ip: Ipv4Addr, tx: &Tx, state: &State, pacer: &Pacer) {
     let attempts = TCP_PORTS.iter().map(|&port| async move {
         pacer.wait().await;
         let res = tokio::time::timeout(CONNECT_TIMEOUT, connect_from(src, SocketAddrV4::new(ip, port))).await;

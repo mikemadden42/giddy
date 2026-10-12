@@ -8,7 +8,7 @@ giddy runs several unprivileged discovery methods at the same time and merges wh
 
 | Method | What it does |
 | --- | --- |
-| **Subnet sweep** | Sends a tiny UDP datagram and a few TCP connection attempts to every address on the subnet. Before the kernel can send anything on the local link it has to resolve the target's MAC address, so this fills the ARP cache with every live host. Only ordinary sockets are used, with no raw packets. A TCP answer (open *or* refused) also proves a host is up. |
+| **Subnet sweep** | First sends a tiny UDP datagram to every address on the subnet. Before the kernel can send anything on the local link it has to resolve the target's MAC address, so this fills the ARP cache with every live host. Then it makes a few TCP connection attempts, only to hosts that answered ARP, to find open ports. Only ordinary sockets are used, with no raw packets. A TCP answer (open *or* refused) also proves a host is up. |
 | **ARP cache** | Reads the kernel neighbor table (`ip neigh` / `/proc/net/arp` on Linux, `sysctl` on macOS, `arp -an` on other BSDs, `arp -a` on Windows) once a second to map IPs to MAC addresses. |
 | **mDNS / DNS-SD** | Sends queries from an ephemeral port ("legacy unicast", RFC 6762 §6.7), so responders reply directly without needing port 5353. It also joins 5353 alongside avahi/mDNSResponder when the OS allows, to hear announcements. Collects hostnames, friendly instance names (e.g. *Guest's iPhone*), services and models. |
 | **SSDP / UPnP** | Sends `M-SEARCH` and fetches each device's description XML for its friendly name, manufacturer and model. Fetches are limited to addresses on the local subnet. |
@@ -77,7 +77,7 @@ The **Via** column shows which methods saw each device: **A**RP, **M**DNS, **U**
 ## Notes
 
 - Large subnets are swept only within the /22 around your own address (1022 hosts).
-- The sweep sends at most `--rate` packets per second (default 500; a /24 takes about 3 seconds). If the OS reports it's out of buffer space or neighbor-table room, giddy halves the rate, down to 10 per second.
+- The sweep sends at most `--rate` packets per second (default 500; a /24 takes a few seconds). If the OS reports it's out of buffer space or neighbor-table room, giddy halves the rate, down to 10 per second.
 - The manufacturer database is embedded in the binary. Run `scripts/update-oui.sh` to refresh `data/oui.tsv.gz` from Wireshark's `manuf` file.
 
 ## Acknowledgements
