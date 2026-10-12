@@ -11,11 +11,11 @@ mod rdns;
 mod ssdp;
 mod sweep;
 
-use std::net::{Ipv4Addr, SocketAddrV4};
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::time::Duration;
 
 use socket2::{Domain, Protocol, Socket, Type};
-use tokio::net::UdpSocket;
+use tokio::net::{TcpSocket, TcpStream, UdpSocket};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::task::JoinSet;
 
@@ -23,6 +23,29 @@ pub use banner::{Banner, HttpInfo};
 
 use crate::device::MacAddr;
 use crate::iface::Iface;
+
+/// Make text received from the network safe to print. Drops control
+/// characters (C0, DEL and C1, which covers ESC and CSI, so no terminal
+/// escape sequences survive) and the bidi controls that can reorder what's
+/// shown. Tabs and line breaks become spaces.
+pub fn sanitize(s: &str) -> String {
+    s.chars()
+        .filter_map(|c| match c {
+            '\t' | '\n' | '\r' => Some(' '),
+            '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' => None,
+            c if c.is_control() => None,
+            c => Some(c),
+        })
+        .collect()
+}
+
+/// Open a TCP connection from the scanned interface's address, so probes
+/// don't leave through another interface when routes overlap.
+pub async fn connect_from(src: Ipv4Addr, dst: SocketAddrV4) -> std::io::Result<TcpStream> {
+    let sock = TcpSocket::new_v4()?;
+    sock.bind(SocketAddr::V4(SocketAddrV4::new(src, 0)))?;
+    sock.connect(SocketAddr::V4(dst)).await
+}
 
 #[derive(Debug, Clone)]
 pub struct MdnsRecord {
@@ -202,5 +225,28 @@ async fn recv_for(sock: &UdpSocket, window: Duration, mut handle: impl FnMut(&[u
             // Transient errors (e.g. queued ICMP unreachables) shouldn't end the window.
             Ok(_) => tokio::time::sleep(Duration::from_millis(10)).await,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sanitize_strips_escapes_and_bidi() {
+        assert_eq!(sanitize("Living Room"), "Living Room");
+        assert_eq!(sanitize("evil\u{1b}]52;c;aGk=\u{7}name"), "evil]52;c;aGk=name");
+        assert_eq!(sanitize("a\u{9b}31mb"), "a31mb"); // C1 CSI
+        assert_eq!(sanitize("line\none\ttab"), "line one tab");
+        assert_eq!(sanitize("abc\u{202e}fed"), "abcfed");
+        assert_eq!(sanitize("Café ☕"), "Café ☕");
+    }
+
+    #[tokio::test]
+    async fn connect_from_uses_the_source_address() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let SocketAddr::V4(dst) = listener.local_addr().unwrap() else { unreachable!() };
+        let stream = connect_from(Ipv4Addr::LOCALHOST, dst).await.unwrap();
+        assert_eq!(stream.local_addr().unwrap().ip(), Ipv4Addr::LOCALHOST);
     }
 }

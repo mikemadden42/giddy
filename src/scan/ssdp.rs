@@ -6,10 +6,9 @@ use std::net::{Ipv4Addr, SocketAddrV4};
 use std::time::Duration;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
 use tokio::task::JoinSet;
 
-use super::{ScanEvent, SsdpDescription, SsdpRecord, Tx, group_socket, query_socket, recv_for};
+use super::{ScanEvent, SsdpDescription, SsdpRecord, Tx, connect_from, group_socket, query_socket, recv_for, sanitize};
 use crate::iface::Iface;
 
 const GROUP: Ipv4Addr = Ipv4Addr::new(239, 255, 255, 250);
@@ -75,7 +74,7 @@ fn handle(buf: &[u8], src: Ipv4Addr, iface: &Iface, tx: &Tx) -> Option<SsdpRecor
     let header = |name: &str| {
         text.lines().find_map(|l| {
             let (k, v) = l.split_once(':')?;
-            (k.trim().eq_ignore_ascii_case(name) && !v.trim().is_empty()).then(|| v.trim().to_string())
+            (k.trim().eq_ignore_ascii_case(name) && !v.trim().is_empty()).then(|| sanitize(v.trim()))
         })
     };
     if header("NTS").is_some_and(|nts| nts.contains("byebye")) {
@@ -100,7 +99,7 @@ async fn describe(location: &str, ip: Ipv4Addr, iface: &Iface) -> anyhow::Result
     let (host, port) = authority.split_once(':').unwrap_or((authority, "80"));
     let host: Ipv4Addr = host.parse()?;
     anyhow::ensure!(iface.contains(host), "description host off-subnet");
-    let mut stream = TcpStream::connect((host, port.parse::<u16>()?)).await?;
+    let mut stream = connect_from(iface.ip, SocketAddrV4::new(host, port.parse()?)).await?;
     let req = format!("GET {path} HTTP/1.0\r\nHost: {authority}\r\nUser-Agent: giddy\r\nConnection: close\r\n\r\n");
     stream.write_all(req.as_bytes()).await?;
     let mut body = Vec::new();
@@ -124,6 +123,7 @@ fn xml_tag(text: &str, tag: &str) -> Option<String> {
         .replace("&gt;", ">")
         .replace("&quot;", "\"")
         .replace("&apos;", "'");
+    let value = sanitize(&value);
     let value = value.trim();
     (!value.is_empty()).then(|| value.to_string())
 }
@@ -139,6 +139,8 @@ mod tests {
         assert_eq!(xml_tag(xml, "friendlyName").as_deref(), Some("Living Room & Den"));
         assert_eq!(xml_tag(xml, "manufacturer").as_deref(), Some("Sonos, Inc."));
         assert_eq!(xml_tag(xml, "modelNumber"), None);
+        let evil = "<friendlyName>TV\u{1b}[2J\u{1b}]0;pwned\u{7}</friendlyName>";
+        assert_eq!(xml_tag(evil, "friendlyName").as_deref(), Some("TV[2J]0;pwned"));
     }
 
     #[test]

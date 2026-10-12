@@ -24,7 +24,7 @@ pub async fn run(mut rx: UnboundedReceiver<Ipv4Addr>, tx: Tx) {
             let name = tokio::task::spawn_blocking(move || dns_lookup::lookup_addr(&IpAddr::V4(ip))).await;
             drop(permit);
             if let Ok(Ok(name)) = name {
-                let name = name.trim_end_matches('.').to_string();
+                let name = super::sanitize(name.trim_end_matches('.'));
                 // Skip synthesized names like systemd-resolved's `_gateway`.
                 if !name.is_empty() && !name.starts_with('_') && name.parse::<IpAddr>().is_err() {
                     let _ = tx.send(ScanEvent::ReverseDns { ip, name });

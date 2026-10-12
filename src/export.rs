@@ -209,9 +209,13 @@ fn write_csv_row(out: &mut impl Write, fields: impl Iterator<Item = String>) -> 
     write!(out, "{}\r\n", row.join(","))
 }
 
-/// Quote a field if it contains a comma, quote or line break; double inner quotes.
+/// Quote a field if it contains a comma, quote or line break; double inner
+/// quotes. A field that a spreadsheet would read as a formula (starting with
+/// `=`, `+`, `-`, `@`, tab or CR) gets a leading `'` so it stays text; device
+/// names come from the network and can't be trusted.
 fn csv_field(s: &str) -> String {
-    if s.contains([',', '"', '\n', '\r']) { format!("\"{}\"", s.replace('"', "\"\"")) } else { s.to_string() }
+    let s = if s.starts_with(['=', '+', '-', '@', '\t', '\r']) { format!("'{s}") } else { s.to_string() };
+    if s.contains([',', '"', '\n', '\r']) { format!("\"{}\"", s.replace('"', "\"\"")) } else { s }
 }
 
 #[cfg(test)]
@@ -235,6 +239,11 @@ mod tests {
     fn csv_quotes_and_joins() {
         assert_eq!(csv_field("plain"), "plain");
         assert_eq!(csv_field("a,b"), "\"a,b\"");
+        assert_eq!(csv_field("=HYPERLINK(\"x\")"), "\"'=HYPERLINK(\"\"x\"\")\"");
+        assert_eq!(csv_field("+1"), "'+1");
+        assert_eq!(csv_field("-2"), "'-2");
+        assert_eq!(csv_field("@SUM(A1)"), "'@SUM(A1)");
+        assert_eq!(csv_field("a=b"), "a=b");
         assert_eq!(csv_field("say \"hi\""), "\"say \"\"hi\"\"\"");
 
         let (_, d) = sample();
