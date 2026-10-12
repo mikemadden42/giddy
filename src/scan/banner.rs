@@ -2,11 +2,13 @@
 //! already opened: the SSH version greeting, and an HTTP `GET /` for the
 //! `Server` header, login realm and page title.
 
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, SocketAddrV4};
 use std::time::Duration;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
+
+use super::{connect_from, sanitize};
 
 const TIMEOUT: Duration = Duration::from_millis(2500);
 const MAX_RESPONSE: u64 = 64 * 1024;
@@ -27,11 +29,12 @@ pub struct HttpInfo {
 }
 
 /// Read a banner from a freshly connected stream, if `port` has a reader.
-pub async fn grab(stream: TcpStream, ip: Ipv4Addr, port: u16) -> Option<Banner> {
+/// `src` is our address, for any follow-up connection.
+pub async fn grab(stream: TcpStream, src: Ipv4Addr, ip: Ipv4Addr, port: u16) -> Option<Banner> {
     let read = async {
         match port {
             22 => ssh(stream).await.map(Banner::Ssh),
-            80 => http(stream, ip).await.map(Banner::Http),
+            80 => http(stream, src, ip).await.map(Banner::Http),
             _ => None,
         }
     };
@@ -46,14 +49,14 @@ async fn ssh(mut stream: TcpStream) -> Option<String> {
     line.starts_with("SSH-").then(|| clean(line, 100))
 }
 
-async fn http(stream: TcpStream, ip: Ipv4Addr) -> Option<HttpInfo> {
+async fn http(stream: TcpStream, src: Ipv4Addr, ip: Ipv4Addr) -> Option<HttpInfo> {
     let first = fetch(stream, ip, "/").await?;
     let mut info = parse_http(&first);
     // Follow one same-host plain-HTTP redirect (e.g. `/` -> `/login.html`)
     // to find a title; anything else just keeps what we have.
     if info.title.is_none()
         && let Some(path) = same_host_redirect(&first, ip)
-        && let Ok(stream) = TcpStream::connect((ip, 80)).await
+        && let Ok(stream) = connect_from(src, SocketAddrV4::new(ip, 80)).await
         && let Some(second) = fetch(stream, ip, &path).await
     {
         let next = parse_http(&second);
@@ -144,8 +147,7 @@ fn same_host_redirect(resp: &str, ip: Ipv4Addr) -> Option<String> {
 
 /// Collapse whitespace, drop control characters and cap the length.
 fn clean(s: &str, max: usize) -> String {
-    let collapsed: String =
-        s.split_whitespace().collect::<Vec<_>>().join(" ").chars().filter(|c| !c.is_control()).collect();
+    let collapsed = sanitize(&s.split_whitespace().collect::<Vec<_>>().join(" "));
     if collapsed.chars().count() > max { collapsed.chars().take(max - 1).chain(['…']).collect() } else { collapsed }
 }
 
