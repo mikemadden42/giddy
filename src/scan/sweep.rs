@@ -3,8 +3,13 @@
 //! target's MAC via ARP, so this fills the neighbor cache for every live
 //! host, with no raw sockets or root needed. Then TCP connection attempts,
 //! only to the hosts that answered ARP, to learn open ports and banners.
+//!
+//! Large ranges go in chunks: each chunk's neighbor entries are read soon
+//! after its datagrams settle, while the next chunk is being sent, because
+//! the kernel's neighbor table is small (1,024 entries by default on Linux)
+//! and would otherwise evict live hosts before we read them.
 
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -17,7 +22,7 @@ use tokio::time::Instant;
 
 use super::banner;
 use super::{ScanEvent, Tx, connect_from};
-use crate::iface::Iface;
+use crate::iface::{Cidr, Iface};
 
 /// Hosts probed at once. Each uses one socket per TCP port, so keep this
 /// well under typical file-descriptor limits. This caps open sockets; the
@@ -26,6 +31,8 @@ use crate::iface::Iface;
 const CONCURRENCY: usize = 64;
 /// How long to wait after the last datagram for ARP replies to arrive.
 const ARP_SETTLE: Duration = Duration::from_millis(1500);
+/// Addresses per chunk: well under the neighbor table's size.
+const CHUNK: usize = 256;
 /// Report phase-one progress every this many addresses, not every one.
 const PROGRESS_EVERY: usize = 32;
 /// Back-pressure never slows the sweep below this many packets per second.
@@ -118,59 +125,89 @@ fn is_backpressure(e: &std::io::Error) -> bool {
     e.kind() == std::io::ErrorKind::OutOfMemory || e.raw_os_error() == Some(ENOBUFS)
 }
 
-pub async fn run(iface: &Iface, tx: &Tx, state: &Arc<State>, rate: u32) -> anyhow::Result<()> {
-    let targets = iface.sweep_targets();
+pub async fn run(iface: &Iface, tx: &Tx, state: &Arc<State>, rate: u32, range: Option<Cidr>) -> anyhow::Result<()> {
+    let targets = match range {
+        Some(r) if iface.covers(r) => iface.targets_in(r),
+        Some(r) => {
+            let _ =
+                tx.send(ScanEvent::Error(format!("--sweep {r} is not on {}; sweeping its default range", iface.name)));
+            iface.sweep_targets()
+        }
+        None => iface.sweep_targets(),
+    };
     let src = iface.ip;
     let udp = UdpSocket::bind(SocketAddrV4::new(src, 0)).await?;
     let pacer = Arc::new(Pacer::new(rate));
-    let total = targets.len();
-    let _ = tx.send(ScanEvent::SweepProgress { done: 0, total });
+    let permits = Arc::new(Semaphore::new(CONCURRENCY));
+    // Progress counts datagram addresses plus TCP hosts; the total grows as
+    // live hosts are found.
+    let total = Arc::new(AtomicUsize::new(targets.len()));
+    let done = Arc::new(AtomicUsize::new(0));
+    let report = |tx: &Tx, done: &AtomicUsize, total: &AtomicUsize| {
+        let _ = tx.send(ScanEvent::SweepProgress {
+            done: done.load(Ordering::Relaxed),
+            total: total.load(Ordering::Relaxed),
+        });
+    };
+    report(tx, &done, &total);
 
-    // Phase 1: one datagram per address, only to make the kernel ARP for it.
-    for (i, &ip) in targets.iter().enumerate() {
-        for port in UDP_PORTS {
-            pacer.wait().await;
-            if let Err(e) = udp.send_to(&[0], SocketAddrV4::new(ip, *port)).await {
-                pacer.on_error(&e, tx);
+    let mut tasks = JoinSet::new();
+    let mut probe_chunk = |hosts: Vec<Ipv4Addr>| {
+        total.fetch_add(hosts.len(), Ordering::Relaxed);
+        for ip in hosts {
+            let (tx, done, total, state, pacer, permits) =
+                (tx.clone(), done.clone(), total.clone(), state.clone(), pacer.clone(), permits.clone());
+            tasks.spawn(async move {
+                let Ok(_permit) = permits.acquire_owned().await else { return };
+                probe_tcp(src, ip, &tx, &state, &pacer).await;
+                done.fetch_add(1, Ordering::Relaxed);
+                report(&tx, &done, &total);
+            });
+        }
+    };
+
+    // Phase 1 sends each chunk's datagrams; once a chunk has settled, phase 2
+    // reads its neighbor entries and starts TCP probes, while later chunks
+    // are still being sent.
+    let mut settling: VecDeque<(Instant, &[Ipv4Addr])> = VecDeque::new();
+    for chunk in targets.chunks(CHUNK) {
+        for &ip in chunk {
+            for port in UDP_PORTS {
+                pacer.wait().await;
+                if let Err(e) = udp.send_to(&[0], SocketAddrV4::new(ip, *port)).await {
+                    pacer.on_error(&e, tx);
+                }
+            }
+            if done.fetch_add(1, Ordering::Relaxed).is_multiple_of(PROGRESS_EVERY) {
+                report(tx, &done, &total);
             }
         }
-        if (i + 1) % PROGRESS_EVERY == 0 {
-            let _ = tx.send(ScanEvent::SweepProgress { done: i + 1, total });
+        settling.push_back((Instant::now() + ARP_SETTLE, chunk));
+        while settling.front().is_some_and(|(due, _)| *due <= Instant::now()) {
+            let (_, settled) = settling.pop_front().expect("checked non-empty");
+            probe_chunk(resolved(iface, settled).await);
         }
     }
-    tokio::time::sleep(ARP_SETTLE).await;
-
-    // Phase 2: TCP only to hosts that answered ARP. Where the neighbor table
-    // can't be read (macOS without the signed bundle ID), probe everything.
-    let mut hosts = resolved(iface, &targets).await;
-    if hosts.is_empty() {
-        hosts = targets;
+    for (due, settled) in settling {
+        tokio::time::sleep_until(due).await;
+        probe_chunk(resolved(iface, settled).await);
     }
-    let total = total + hosts.len();
-    let done = Arc::new(AtomicUsize::new(total - hosts.len()));
-    let _ = tx.send(ScanEvent::SweepProgress { done: done.load(Ordering::Relaxed), total });
-    let permits = Arc::new(Semaphore::new(CONCURRENCY));
-    let mut tasks = JoinSet::new();
-    for ip in hosts {
-        let permit = permits.clone().acquire_owned().await?;
-        let (tx, done, state, pacer) = (tx.clone(), done.clone(), state.clone(), pacer.clone());
-        tasks.spawn(async move {
-            probe_tcp(src, ip, &tx, &state, &pacer).await;
-            drop(permit);
-            let done = done.fetch_add(1, Ordering::Relaxed) + 1;
-            let _ = tx.send(ScanEvent::SweepProgress { done, total });
-        });
-    }
+    report(tx, &done, &total);
     while tasks.join_next().await.is_some() {}
     Ok(())
 }
 
-/// The targets that now have a MAC address in the neighbor table, in order.
-async fn resolved(iface: &Iface, targets: &[Ipv4Addr]) -> Vec<Ipv4Addr> {
+/// The addresses in `chunk` that now have a MAC in the neighbor table. If
+/// the table can't be read at all (macOS without the signed bundle ID), all
+/// of `chunk`, so TCP probing still covers it.
+async fn resolved(iface: &Iface, chunk: &[Ipv4Addr]) -> Vec<Ipv4Addr> {
     let name = iface.name.clone();
     let entries = tokio::task::spawn_blocking(move || super::arp::read(&name)).await.unwrap_or_default();
+    if entries.is_empty() {
+        return chunk.to_vec();
+    }
     let known: HashSet<Ipv4Addr> = entries.into_iter().map(|e| e.ip).collect();
-    targets.iter().copied().filter(|ip| known.contains(ip)).collect()
+    chunk.iter().copied().filter(|ip| known.contains(ip)).collect()
 }
 
 async fn probe_tcp(src: Ipv4Addr, ip: Ipv4Addr, tx: &Tx, state: &State, pacer: &Pacer) {

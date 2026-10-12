@@ -22,7 +22,7 @@ use tokio::task::JoinSet;
 pub use banner::{Banner, HttpInfo};
 
 use crate::device::MacAddr;
-use crate::iface::Iface;
+use crate::iface::{Cidr, Iface};
 
 /// Make text received from the network safe to print. Drops control
 /// characters (C0, DEL and C1, which covers ESC and CSI, so no terminal
@@ -144,6 +144,8 @@ pub struct Config {
     pub sweep: bool,
     /// Maximum sweep probe packets per second.
     pub rate: u32,
+    /// Sweep this range instead of the default block around our address.
+    pub range: Option<Cidr>,
 }
 
 /// Run discovery on `iface` until the returned future is dropped/aborted.
@@ -170,7 +172,7 @@ pub async fn run(iface: Iface, cfg: Config, generation: u64, out: UnboundedSende
         // NetBIOS asks only hosts with ARP entries, so it follows the sweep.
         let sweep_then_netbios = async {
             if cfg.sweep {
-                tracked(&tx, Task::Sweep, sweep::run(&iface, &tx, &sweep_state, cfg.rate)).await;
+                tracked(&tx, Task::Sweep, sweep::run(&iface, &tx, &sweep_state, cfg.rate, cfg.range)).await;
             }
             tracked(&tx, Task::NetBios, netbios::query(&iface, &tx)).await;
         };

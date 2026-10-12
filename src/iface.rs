@@ -4,9 +4,40 @@ use std::net::{Ipv4Addr, UdpSocket};
 
 use crate::device::MacAddr;
 
-/// Never sweep more than this many addresses; larger networks are narrowed
-/// to the block around our own address.
+/// Never sweep more than this many addresses by default; larger networks
+/// are narrowed to the block around our own address unless `--sweep` asks
+/// for more.
 pub const MAX_SWEEP_PREFIX: u8 = 22;
+/// The largest range `--sweep` accepts (65,534 hosts).
+pub const MIN_SWEEP_PREFIX: u8 = 16;
+
+/// An IPv4 range like `172.16.0.0/16`. Host bits are cleared on parsing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Cidr {
+    pub net: Ipv4Addr,
+    pub prefix: u8,
+}
+
+impl std::str::FromStr for Cidr {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let (ip, prefix) = s.split_once('/').ok_or("expected an address range like 172.16.0.0/16")?;
+        let ip: Ipv4Addr = ip.parse().map_err(|_| format!("{ip:?} is not an IPv4 address"))?;
+        let prefix: u8 = prefix.parse().map_err(|_| format!("{prefix:?} is not a prefix length"))?;
+        if !(MIN_SWEEP_PREFIX..=30).contains(&prefix) {
+            return Err(format!("prefix must be /{MIN_SWEEP_PREFIX} to /30 (at most 65,534 hosts)"));
+        }
+        let net = Ipv4Addr::from(u32::from(ip) & Iface::mask_for(prefix));
+        Ok(Cidr { net, prefix })
+    }
+}
+
+impl std::fmt::Display for Cidr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}/{}", self.net, self.prefix)
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct Iface {
@@ -42,12 +73,24 @@ impl Iface {
     /// Host addresses to probe, excluding network, broadcast and ourselves.
     pub fn sweep_targets(&self) -> Vec<Ipv4Addr> {
         let prefix = self.sweep_prefix();
-        if prefix >= 31 {
+        let net = Ipv4Addr::from(u32::from(self.ip) & Self::mask_for(prefix));
+        self.targets_in(Cidr { net, prefix })
+    }
+
+    /// True if all of `range` is on this interface's subnet. Only on-link
+    /// addresses trigger ARP, so only those are worth sweeping.
+    pub fn covers(&self, range: Cidr) -> bool {
+        range.prefix >= self.prefix && self.contains(range.net)
+    }
+
+    /// Host addresses in `range`, excluding its network and broadcast
+    /// addresses and ourselves.
+    pub fn targets_in(&self, range: Cidr) -> Vec<Ipv4Addr> {
+        if range.prefix >= 31 {
             return Vec::new();
         }
-        let mask = Self::mask_for(prefix);
-        let net = u32::from(self.ip) & mask;
-        let bcast = net | !mask;
+        let net = u32::from(range.net) & Self::mask_for(range.prefix);
+        let bcast = net | !Self::mask_for(range.prefix);
         let me = u32::from(self.ip);
         (net + 1..bcast).filter(|a| *a != me).map(Ipv4Addr::from).collect()
     }
@@ -131,6 +174,33 @@ mod tests {
 
     fn iface(ip: [u8; 4], prefix: u8) -> Iface {
         Iface { name: "test0".into(), ip: ip.into(), prefix, mac: None, gateway: None }
+    }
+
+    #[test]
+    fn parses_cidr() {
+        let c: Cidr = "172.16.143.34/16".parse().unwrap();
+        assert_eq!(c, Cidr { net: Ipv4Addr::new(172, 16, 0, 0), prefix: 16 });
+        assert_eq!(c.to_string(), "172.16.0.0/16");
+        assert!("10.0.0.0/8".parse::<Cidr>().is_err());
+        assert!("10.0.0.0/31".parse::<Cidr>().is_err());
+        assert!("10.0.0.0".parse::<Cidr>().is_err());
+        assert!("10.0.0/24".parse::<Cidr>().is_err());
+    }
+
+    #[test]
+    fn explicit_ranges() {
+        let wide = iface([172, 16, 143, 34], 16);
+        let all: Cidr = "172.16.0.0/16".parse().unwrap();
+        assert!(wide.covers(all));
+        assert_eq!(wide.targets_in(all).len(), 65_533); // minus network, broadcast, us
+        assert_eq!(wide.sweep_targets().len(), 1021); // the default /22 cap still applies
+
+        let home = iface([10, 0, 0, 109], 24);
+        let half: Cidr = "10.0.0.0/25".parse().unwrap();
+        assert!(home.covers(half));
+        assert_eq!(home.targets_in(half).len(), 125); // .1-.126, minus .109 (us)
+        assert!(!home.covers("10.0.0.0/16".parse().unwrap())); // wider than the subnet
+        assert!(!home.covers("10.0.1.0/24".parse().unwrap())); // a different subnet
     }
 
     #[test]
