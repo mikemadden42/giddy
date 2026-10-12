@@ -142,6 +142,8 @@ pub type Tagged = (u64, ScanEvent);
 pub struct Config {
     pub interval: Duration,
     pub sweep: bool,
+    /// Maximum sweep probe packets per second.
+    pub rate: u32,
 }
 
 /// Run discovery on `iface` until the returned future is dropped/aborted.
@@ -168,7 +170,7 @@ pub async fn run(iface: Iface, cfg: Config, generation: u64, out: UnboundedSende
         // NetBIOS asks only hosts with ARP entries, so it follows the sweep.
         let sweep_then_netbios = async {
             if cfg.sweep {
-                tracked(&tx, Task::Sweep, sweep::run(&iface, &tx, &sweep_state)).await;
+                tracked(&tx, Task::Sweep, sweep::run(&iface, &tx, &sweep_state, cfg.rate)).await;
             }
             tracked(&tx, Task::NetBios, netbios::query(&iface, &tx)).await;
         };
