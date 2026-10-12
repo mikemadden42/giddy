@@ -45,6 +45,7 @@ giddy -i wlan0                   # pick an interface
 giddy --list-interfaces
 giddy --interval 60              # seconds between discovery rounds (default 30)
 giddy --no-sweep                 # passive-ish: mDNS, SSDP and existing ARP cache only
+giddy --rate 100                 # gentler sweep: at most 100 packets/s (default 500)
 giddy --once                     # one round, print a plain-text table, exit
 giddy --format json > scan.json  # one round as JSON (every detail; implies --once)
 giddy --format csv > scan.csv    # one round as CSV, one row per device
@@ -76,6 +77,7 @@ The **Via** column shows which methods saw each device: **A**RP, **M**DNS, **U**
 ## Notes
 
 - Large subnets are swept only within the /22 around your own address (1022 hosts).
+- The sweep sends at most `--rate` packets per second (default 500; a /24 takes about 3 seconds). If the OS reports it's out of buffer space or neighbor-table room, giddy halves the rate, down to 10 per second.
 - The manufacturer database is embedded in the binary. Run `scripts/update-oui.sh` to refresh `data/oui.tsv.gz` from Wireshark's `manuf` file.
 
 ## Acknowledgements
