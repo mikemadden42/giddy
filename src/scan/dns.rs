@@ -8,6 +8,10 @@ pub const TYPE_TXT: u16 = 16;
 pub const TYPE_SRV: u16 = 33;
 pub const TYPE_ANY: u16 = 255;
 
+/// Smallest possible resource record: a one-byte (root) name plus type,
+/// class, TTL and data length.
+const MIN_RECORD: usize = 11;
+
 /// A domain name as its raw labels (instance names may contain dots or
 /// arbitrary UTF-8, so we never round-trip through presentation format).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -131,7 +135,7 @@ impl<'a> Reader<'a> {
                 }
                 0x00 => {
                     let label = self.buf.get(pos + 1..pos + 1 + len)?;
-                    labels.push(String::from_utf8_lossy(label).into_owned());
+                    labels.push(super::sanitize(&String::from_utf8_lossy(label)));
                     pos += 1 + len;
                 }
                 0xc0 => {
@@ -167,7 +171,9 @@ pub fn parse_response(buf: &[u8]) -> Option<Vec<Record>> {
         r.u32()?; // type + class
     }
     let total: usize = counts.iter().map(|c| *c as usize).sum();
-    let mut records = Vec::with_capacity(total);
+    // The counts are untrusted; a record takes at least MIN_RECORD bytes, so
+    // don't reserve room for more records than the packet could hold.
+    let mut records = Vec::with_capacity(total.min(buf.len().saturating_sub(r.pos) / MIN_RECORD));
     for _ in 0..total {
         let name = r.name()?;
         let rtype = r.u16()?;
@@ -197,7 +203,7 @@ pub fn parse_response(buf: &[u8]) -> Option<Vec<Record>> {
                     let len = r.u8()? as usize;
                     let s = r.bytes(len.min(end.saturating_sub(r.pos)))?;
                     if !s.is_empty() {
-                        strings.push(String::from_utf8_lossy(s).into_owned());
+                        strings.push(super::sanitize(&String::from_utf8_lossy(s)));
                     }
                 }
                 RData::Txt(strings)
@@ -213,6 +219,23 @@ pub fn parse_response(buf: &[u8]) -> Option<Vec<Record>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn huge_counts_in_a_tiny_packet() {
+        // A response header claiming 65535 records in each section, and no records.
+        let b = [0, 0, 0x84, 0, 0, 0, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff];
+        assert!(parse_response(&b).is_none());
+    }
+
+    #[test]
+    fn labels_are_sanitized() {
+        // 1 answer: PTR record whose owner name is "a<ESC>b".
+        let mut b = vec![0, 0, 0x84, 0, 0, 0, 0, 1, 0, 0, 0, 0];
+        b.extend_from_slice(b"\x03a\x1bb\x00");
+        b.extend_from_slice(&[0, 12, 0, 1, 0, 0, 0, 120, 0, 1, 0]);
+        let recs = parse_response(&b).unwrap();
+        assert_eq!(recs[0].name.0, ["ab"]);
+    }
 
     #[test]
     fn query_layout() {
