@@ -35,6 +35,11 @@ struct Args {
     #[arg(long)]
     no_sweep: bool,
 
+    /// Maximum packets per second the sweep sends (each UDP datagram or TCP
+    /// connection attempt counts as one)
+    #[arg(long, default_value_t = 500, value_parser = clap::value_parser!(u32).range(1..=100_000))]
+    rate: u32,
+
     /// List usable interfaces and exit
     #[arg(long)]
     list_interfaces: bool,
@@ -71,7 +76,7 @@ async fn main() -> anyhow::Result<()> {
         None => iface::default_index(&ifaces).unwrap_or(0),
     };
 
-    let cfg = scan::Config { interval: Duration::from_secs(args.interval), sweep: !args.no_sweep };
+    let cfg = scan::Config { interval: Duration::from_secs(args.interval), sweep: !args.no_sweep, rate: args.rate };
     let (tx, rx) = mpsc::unbounded_channel();
     let mut app = App::new(ifaces, idx, cfg, tx);
     oui::warm_up();

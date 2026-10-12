@@ -1,6 +1,6 @@
 [package]
 name = "giddy"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "Terminal UI that discovers devices on your local network without elevated privileges"
 license = "MIT"
