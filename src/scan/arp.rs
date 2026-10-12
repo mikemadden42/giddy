@@ -191,7 +191,7 @@ fn parse_bsd_arp(text: &str, dev: &str) -> Vec<Entry> {
         .collect()
 }
 
-/// `  10.0.0.1          3c-37-86-18-ee-a3     dynamic`
+/// `  10.0.0.1          3c-37-86-00-00-01     dynamic`
 #[cfg_attr(not(windows), allow(dead_code))]
 fn parse_windows_arp(text: &str) -> Vec<Entry> {
     text.lines()
@@ -248,9 +248,9 @@ mod tests {
             m
         }
         let buf = [
-            msg(4, [10, 0, 0, 1], Some([0x3c, 0x37, 0x86, 0x18, 0xee, 0xa3])),
+            msg(4, [10, 0, 0, 1], Some([0x3c, 0x37, 0x86, 0x00, 0x00, 0x01])),
             msg(4, [10, 0, 0, 2], None),
-            msg(7, [10, 0, 0, 3], Some([0x3c, 0x37, 0x86, 0x19, 0x81, 0xc1])),
+            msg(7, [10, 0, 0, 3], Some([0x3c, 0x37, 0x86, 0x00, 0x00, 0x02])),
             msg(4, [10, 0, 0, 255], Some([0xff; 6])),
         ]
         .concat();
@@ -267,7 +267,7 @@ mod tests {
                    ? (224.0.0.251) at 1:0:5e:0:0:fb on en0 ifscope permanent [ethernet]\n";
         assert_eq!(parse_bsd_arp(bsd, "en0").len(), 1);
         let win = "Interface: 10.0.0.5 --- 0x7\n  Internet Address      Physical Address      Type\n  \
-                   10.0.0.1              3c-37-86-18-ee-a3     dynamic\n  \
+                   10.0.0.1              3c-37-86-00-00-01     dynamic\n  \
                    10.0.0.255            ff-ff-ff-ff-ff-ff     static\n";
         assert_eq!(parse_windows_arp(win).len(), 1);
     }

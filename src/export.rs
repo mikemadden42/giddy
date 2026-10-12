@@ -226,7 +226,7 @@ mod tests {
     fn sample() -> (Iface, Device) {
         let iface = Iface { name: "eth0".into(), ip: [10, 0, 0, 2].into(), prefix: 24, mac: None, gateway: None };
         let mut d = Device::new([10, 0, 0, 72].into());
-        d.set_mac(MacAddr([0x94, 0xdd, 0xf8, 0xf4, 0x80, 0xce]));
+        d.set_mac(MacAddr([0x94, 0xdd, 0xf8, 0x00, 0x00, 0x06]));
         d.rdns = Some("printer, \"office\"".into());
         d.open_ports.extend([80, 443]);
         d.sources.insert(Sources::ARP);

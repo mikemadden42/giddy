@@ -53,7 +53,7 @@ mod tests {
 
     #[test]
     fn known_vendors() {
-        let apple = MacAddr([0xe0, 0x89, 0x7e, 0x72, 0x85, 0xaa]);
+        let apple = MacAddr([0xe0, 0x89, 0x7e, 0x00, 0x00, 0x0a]);
         assert_eq!(lookup(apple), Some("Apple, Inc."));
         // MA-S block inside 00:50:C2
         let tls = MacAddr([0x00, 0x50, 0xc2, 0x00, 0x0f, 0xff]);

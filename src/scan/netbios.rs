@@ -179,7 +179,7 @@ mod tests {
                 entry("DESKTOP-7Q2LM", 0x20, 0x0400),
                 entry("\u{1}\u{2}__MSBROWSE__\u{2}", 0x01, 0x8400),
             ],
-            [0xc8, 0x4b, 0xd6, 0xe7, 0x8a, 0x5c],
+            [0xc8, 0x4b, 0xd6, 0x00, 0x00, 0x0b],
         );
         let rec = parse_response(&buf, Ipv4Addr::new(10, 0, 0, 41)).unwrap();
         assert_eq!(rec.name.as_deref(), Some("DESKTOP-7Q2LM"));
@@ -197,7 +197,7 @@ mod tests {
 
     #[test]
     fn macos_empty_name_table() {
-        let buf = response(&[], [0x50, 0xa6, 0xd8, 0xc3, 0x41, 0xef]);
+        let buf = response(&[], [0x50, 0xa6, 0xd8, 0x00, 0x00, 0x08]);
         let rec = parse_response(&buf, Ipv4Addr::new(10, 0, 0, 73)).unwrap();
         assert!(rec.name.is_none());
         assert!(rec.mac.is_some());
