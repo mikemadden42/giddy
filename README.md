@@ -78,7 +78,7 @@ The **Via** column shows which methods saw each device: **A**RP, **M**DNS, **U**
 ## Notes
 
 - By default, large subnets are swept only within the /22 around your own address (1022 hosts). Use `--sweep` to choose a range on your subnet, up to a /16. Big ranges are swept in chunks of 256 addresses, reading the ARP table after each, because the kernel only keeps about 1,024 entries.
-- The sweep sends at most `--rate` packets per second (default 500; a /24 takes a few seconds). If the OS reports it's out of buffer space or neighbor-table room, giddy halves the rate, down to 10 per second.
+- The sweep sends at most `--rate` packets per second (default 500; a /24 takes a few seconds). If the kernel's neighbor table fills up (on Linux, counted in `/proc/net/stat/arp_cache`) or the OS reports it's out of buffer space, giddy halves the rate, down to 10 per second.
 - The manufacturer database is embedded in the binary. Run `scripts/update-oui.sh` to refresh `data/oui.tsv.gz` from Wireshark's `manuf` file.
 
 ## Acknowledgements

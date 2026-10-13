@@ -50,7 +50,13 @@ impl SortKey {
 pub enum Mode {
     Normal,
     Filter,
-    Alias(String),
+    /// Naming a device. Its MAC and IP are captured when the prompt opens,
+    /// since rows can move under the cursor while the user types.
+    Alias {
+        mac: MacAddr,
+        ip: Ipv4Addr,
+        input: String,
+    },
     Interfaces(usize),
     Help,
 }
@@ -62,6 +68,11 @@ pub struct ScanStatus {
     pub running: BTreeSet<Task>,
     pub cycles: u32,
     pub next_at: Option<Instant>,
+    /// When the current discovery cycle began (scan start, or the end of
+    /// the previous cycle), and how long the last full cycle took, wait
+    /// included. A /16 sweep makes cycles minutes long.
+    pub cycle_started: Option<Instant>,
+    pub last_cycle: Duration,
 }
 
 impl ScanStatus {
@@ -122,9 +133,13 @@ impl App {
         }
     }
 
-    /// How long a device can go unseen before its row is dimmed.
+    /// How long a device can go unseen before its row is dimmed. At least
+    /// one and a half discovery cycles, so a long sweep (e.g. `--sweep` over a
+    /// /16) doesn't dim devices it just hasn't reached again yet.
     pub fn stale_after(&self) -> Duration {
-        (self.cfg.interval * 3).max(Duration::from_secs(90))
+        let base = (self.cfg.interval * 3).max(Duration::from_secs(90));
+        let current = self.status.cycle_started.map(|t| t.elapsed()).unwrap_or_default();
+        base.max(self.status.last_cycle.max(current) * 3 / 2)
     }
 
     pub fn current_iface(&self) -> &Iface {
@@ -137,7 +152,8 @@ impl App {
             handle.abort();
         }
         self.generation += 1;
-        self.status = ScanStatus { cycles: self.status.cycles, ..Default::default() };
+        self.status =
+            ScanStatus { cycles: self.status.cycles, cycle_started: Some(Instant::now()), ..Default::default() };
         let iface = self.current_iface().clone();
         self.add_self(&iface);
         let fut = scan::run(iface, self.cfg.clone(), self.generation, self.out.clone());
@@ -223,8 +239,17 @@ impl App {
             ScanEvent::Ssdp(rec) => device_entry(devices, iface, rec.ip).apply_ssdp(&rec),
             ScanEvent::SsdpDescription(desc) => device_entry(devices, iface, desc.ip).apply_ssdp_description(&desc),
             ScanEvent::NetBios(rec) => device_entry(devices, iface, rec.ip).apply_netbios(&rec),
-            ScanEvent::Banner { ip, banner } => device_entry(devices, iface, ip).apply_banner(&banner),
-            ScanEvent::ReverseDns { ip, name } => device_entry(devices, iface, ip).rdns = Some(name),
+            // Late answers for a row that's since been pruned shouldn't bring it back.
+            ScanEvent::Banner { ip, banner } => {
+                if let Some(dev) = devices.get_mut(&ip) {
+                    dev.apply_banner(&banner);
+                }
+            }
+            ScanEvent::ReverseDns { ip, name } => {
+                if let Some(dev) = devices.get_mut(&ip) {
+                    dev.rdns = Some(name);
+                }
+            }
             ScanEvent::SweepProgress { done, total } => self.status.sweep = Some((done, total)),
             ScanEvent::TaskStarted(task) | ScanEvent::TaskFinished(task) => {
                 let running = matches!(ev, ScanEvent::TaskStarted(_));
@@ -240,6 +265,11 @@ impl App {
             ScanEvent::CycleFinished { next_in } => {
                 self.status.cycles += 1;
                 self.status.next_at = Some(Instant::now() + next_in);
+                if let Some(started) = self.status.cycle_started {
+                    // Count the wait before the next cycle too.
+                    self.status.last_cycle = started.elapsed() + next_in;
+                }
+                self.status.cycle_started = Some(Instant::now() + next_in);
             }
             ScanEvent::Error(msg) => self.toast(msg),
         }
@@ -320,7 +350,7 @@ impl App {
                 }
                 _ => {}
             },
-            Mode::Alias(input) => match key.code {
+            Mode::Alias { mac, ip, input } => match key.code {
                 KeyCode::Esc => self.mode = Mode::Normal,
                 KeyCode::Backspace => {
                     input.pop();
@@ -329,9 +359,9 @@ impl App {
                     input.push(c);
                 }
                 KeyCode::Enter => {
-                    let input = std::mem::take(input);
+                    let (mac, ip, input) = (*mac, *ip, std::mem::take(input));
                     self.mode = Mode::Normal;
-                    self.save_alias(&input);
+                    self.save_alias(mac, ip, &input);
                 }
                 _ => {}
             },
@@ -383,11 +413,16 @@ impl App {
                 self.toast("Rescanning…");
             }
             KeyCode::Char('i') => self.mode = Mode::Interfaces(self.iface),
-            KeyCode::Char('a') => match self.selected_device() {
-                Some(d) if d.mac.is_some() => self.mode = Mode::Alias(d.alias.clone().unwrap_or_default()),
-                Some(_) => self.toast("Can't alias a device without a known MAC address"),
-                None => {}
-            },
+            KeyCode::Char('a') => {
+                if let Some(d) = self.selected_device() {
+                    match d.mac {
+                        Some(mac) => {
+                            self.mode = Mode::Alias { mac, ip: d.ip, input: d.alias.clone().unwrap_or_default() };
+                        }
+                        None => self.toast("Can't alias a device without a known MAC address"),
+                    }
+                }
+            }
             KeyCode::Char('y') => {
                 if let Some(ip) = self.selected_device().map(|d| d.ip) {
                     self.copy(&ip.to_string());
@@ -403,8 +438,7 @@ impl App {
         }
     }
 
-    fn save_alias(&mut self, input: &str) {
-        let Some((ip, mac)) = self.selected_device().and_then(|d| Some((d.ip, d.mac?))) else { return };
+    fn save_alias(&mut self, mac: MacAddr, ip: Ipv4Addr, input: &str) {
         match self.aliases.set(mac, input) {
             Ok(()) => self.toast(if input.trim().is_empty() { "Alias cleared" } else { "Alias saved" }),
             Err(e) => self.toast(format!("Couldn't save alias: {e}")),
@@ -520,6 +554,37 @@ mod tests {
         let mut old = super::superseded(&devices, Ipv4Addr::new(10, 0, 0, 110), mac, Duration::from_secs(90));
         old.sort();
         assert_eq!(old, [Ipv4Addr::new(10, 0, 0, 104)]);
+    }
+
+    fn app() -> super::App {
+        let iface =
+            crate::iface::Iface { name: "t".into(), ip: [10, 0, 0, 2].into(), prefix: 24, mac: None, gateway: None };
+        let cfg = crate::scan::Config { interval: Duration::from_secs(30), sweep: true, rate: 500, range: None };
+        super::App::new(vec![iface], 0, cfg, tokio::sync::mpsc::unbounded_channel().0)
+    }
+
+    #[test]
+    fn long_cycles_stretch_the_dimming_threshold() {
+        let mut app = app();
+        assert_eq!(app.stale_after(), Duration::from_secs(90)); // a quick /24 cycle
+        app.status.last_cycle = Duration::from_secs(200); // e.g. a /16 sweep plus the wait
+        assert_eq!(app.stale_after(), Duration::from_secs(300));
+        // A first cycle still running counts too.
+        app.status.last_cycle = Duration::ZERO;
+        app.status.cycle_started = Instant::now().checked_sub(Duration::from_secs(120));
+        assert!(app.stale_after() >= Duration::from_secs(180));
+    }
+
+    #[test]
+    fn late_answers_do_not_recreate_rows() {
+        use crate::scan::ScanEvent;
+        let mut app = app();
+        let ip = Ipv4Addr::new(10, 0, 0, 9);
+        app.on_scan((0, ScanEvent::ReverseDns { ip, name: "old".into() }));
+        assert!(!app.devices.contains_key(&ip));
+        app.devices.insert(ip, Device::new(ip));
+        app.on_scan((0, ScanEvent::ReverseDns { ip, name: "printer".into() }));
+        assert_eq!(app.devices[&ip].rdns.as_deref(), Some("printer"));
     }
 
     #[test]

@@ -54,7 +54,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     match &app.mode {
         Mode::Help => draw_help(f),
         Mode::Interfaces(cursor) => draw_interfaces(f, app, *cursor),
-        Mode::Alias(input) => draw_alias(f, app, input),
+        Mode::Alias { ip, input, .. } => draw_alias(f, *ip, input),
         _ => {}
     }
 }
@@ -104,7 +104,7 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
 fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     let hints: &[(&str, &str)] = match app.mode {
         Mode::Filter => &[("type", "filter"), ("enter", "done"), ("esc", "clear")],
-        Mode::Alias(_) => &[("enter", "save (empty clears)"), ("esc", "cancel")],
+        Mode::Alias { .. } => &[("enter", "save (empty clears)"), ("esc", "cancel")],
         Mode::Interfaces(_) => &[("↑↓", "choose"), ("enter", "scan"), ("esc", "cancel")],
         Mode::Help => &[("any key", "close")],
         Mode::Normal => &[
@@ -384,11 +384,10 @@ fn draw_interfaces(f: &mut Frame, app: &App, cursor: usize) {
     f.render_stateful_widget(list, area, &mut state);
 }
 
-fn draw_alias(f: &mut Frame, app: &App, input: &str) {
+fn draw_alias(f: &mut Frame, ip: std::net::Ipv4Addr, input: &str) {
     let area = popup(f.area(), 50, 5);
-    let target = app.selected_device().map(|d| d.ip.to_string()).unwrap_or_default();
     let text = Text::from(vec![
-        Line::styled(format!("Name for {target}:"), muted()),
+        Line::styled(format!("Name for {ip}:"), muted()),
         Line::from(vec![Span::raw(input), Span::styled("▏", Style::new().fg(ACCENT))]),
     ]);
     f.render_widget(Clear, area);
