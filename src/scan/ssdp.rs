@@ -75,8 +75,8 @@ pub async fn search(iface: &Iface, tx: &Tx, state: &mut State) -> anyhow::Result
                     fetches.spawn(async move {
                         let fetch = describe(&loc, ip, &iface);
                         let succeeded = match tokio::time::timeout(Duration::from_secs(4), fetch).await {
-                            Ok(Ok(desc)) => {
-                                let _ = tx.send(ScanEvent::SsdpDescription(desc));
+                            Ok(Ok(description)) => {
+                                let _ = tx.send(ScanEvent::SsdpDescription(description));
                                 true
                             }
                             _ => false,
