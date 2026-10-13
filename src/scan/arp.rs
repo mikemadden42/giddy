@@ -210,6 +210,9 @@ fn parse_bsd_arp(text: &str, dev: &str) -> Vec<Entry> {
 }
 
 /// `  10.0.0.1          3c-37-86-00-00-01     dynamic`
+///
+/// Windows localizes the type column, so identify complete neighbor rows by
+/// their address fields instead of matching the English word `dynamic`.
 #[cfg_attr(not(windows), allow(dead_code))]
 fn parse_windows_arp(text: &str) -> Vec<Entry> {
     text.lines()
@@ -217,7 +220,7 @@ fn parse_windows_arp(text: &str) -> Vec<Entry> {
             let tokens: Vec<&str> = line.split_whitespace().collect();
             let ip = tokens.first()?.parse().ok()?;
             let mac: MacAddr = tokens.get(1)?.parse().ok()?;
-            (tokens.get(2) == Some(&"dynamic") && usable(mac)).then_some(Entry { ip, mac, active: true })
+            usable(mac).then_some(Entry { ip, mac, active: true })
         })
         .collect()
 }
