@@ -25,7 +25,8 @@ const SUFFIX_SERVER: u8 = 0x20;
 /// addresses would sit in the socket buffer awaiting ARP and stall sends.
 pub async fn query(iface: &Iface, tx: &Tx) -> anyhow::Result<()> {
     let dev = iface.name.clone();
-    let neighbors = tokio::task::spawn_blocking(move || super::arp::read(&dev)).await?;
+    let ip = iface.ip;
+    let neighbors = tokio::task::spawn_blocking(move || super::arp::read(&dev, ip)).await?;
     let targets: Vec<Ipv4Addr> = neighbors.into_iter().map(|e| e.ip).filter(|ip| iface.contains(*ip)).collect();
     let sock = UdpSocket::bind(SocketAddrV4::new(iface.ip, 0)).await?;
     let request = build_request(0x6764);

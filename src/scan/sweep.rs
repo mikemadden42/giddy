@@ -269,7 +269,8 @@ pub async fn run(iface: &Iface, tx: &Tx, state: &Arc<State>, rate: u32, range: O
 /// of output it doesn't recognize.
 async fn resolved(iface: &Iface, chunk: &[Ipv4Addr]) -> Vec<Ipv4Addr> {
     let name = iface.name.clone();
-    let entries = tokio::task::spawn_blocking(move || super::arp::read_result(&name)).await;
+    let ip = iface.ip;
+    let entries = tokio::task::spawn_blocking(move || super::arp::read_result(&name, ip)).await;
     select_resolved(iface, chunk, entries.ok().and_then(Result::ok))
 }
 

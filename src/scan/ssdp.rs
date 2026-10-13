@@ -23,22 +23,29 @@ const MAX_CACHED_LOCATIONS: usize = 512;
 pub struct State {
     fetched: HashSet<String>,
     fetch_order: VecDeque<String>,
+    in_flight: HashSet<String>,
 }
 
 impl State {
-    fn remember(&mut self, location: &str) -> bool {
-        if self.fetched.contains(location) {
+    fn start_fetch(&mut self, location: &str) -> bool {
+        if self.fetched.contains(location) || !self.in_flight.insert(location.to_string()) {
             return false;
+        }
+        true
+    }
+
+    fn finish_fetch(&mut self, location: String, succeeded: bool) {
+        self.in_flight.remove(&location);
+        if !succeeded {
+            return;
         }
         if self.fetch_order.len() == MAX_CACHED_LOCATIONS
             && let Some(expired) = self.fetch_order.pop_front()
         {
             self.fetched.remove(&expired);
         }
-        let location = location.to_string();
         self.fetched.insert(location.clone());
         self.fetch_order.push_back(location);
-        true
     }
 }
 
@@ -58,21 +65,34 @@ pub async fn search(iface: &Iface, tx: &Tx, state: &mut State) -> anyhow::Result
                 && let Some(loc) = rec.location
             {
                 // Completed tasks still occupy a JoinSet slot until reaped.
-                while fetches.try_join_next().is_some() {}
-                if fetches.len() < MAX_DESCRIPTION_FETCHES && state.remember(&loc) {
-                    let (tx, iface) = (tx.clone(), iface.clone());
+                while let Some(result) = fetches.try_join_next() {
+                    if let Ok((location, succeeded)) = result {
+                        state.finish_fetch(location, succeeded);
+                    }
+                }
+                if fetches.len() < MAX_DESCRIPTION_FETCHES && state.start_fetch(&loc) {
+                    let (tx, iface, ip) = (tx.clone(), iface.clone(), rec.ip);
                     fetches.spawn(async move {
-                        let fetch = describe(&loc, rec.ip, &iface);
-                        if let Ok(Ok(desc)) = tokio::time::timeout(Duration::from_secs(4), fetch).await {
-                            let _ = tx.send(ScanEvent::SsdpDescription(desc));
-                        }
+                        let fetch = describe(&loc, ip, &iface);
+                        let succeeded = match tokio::time::timeout(Duration::from_secs(4), fetch).await {
+                            Ok(Ok(description)) => {
+                                let _ = tx.send(ScanEvent::SsdpDescription(description));
+                                true
+                            }
+                            _ => false,
+                        };
+                        (loc, succeeded)
                     });
                 }
             }
         })
         .await;
     }
-    while fetches.join_next().await.is_some() {}
+    while let Some(result) = fetches.join_next().await {
+        if let Ok((location, succeeded)) = result {
+            state.finish_fetch(location, succeeded);
+        }
+    }
     Ok(())
 }
 
