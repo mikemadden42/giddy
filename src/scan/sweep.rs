@@ -62,7 +62,7 @@ impl State {
 /// most `rate` per second, without bursting to catch up after a pause.
 /// Halves the rate when the OS signals back-pressure: a send error where the
 /// OS reports one, or (on Linux, where UDP drops and TCP retries silently)
-/// the kernel evicting or refusing neighbor entries; see [`ArpPressure`].
+/// the kernel refusing new neighbor entries; see [`ArpPressure`].
 struct Pacer {
     inner: Mutex<PacerState>,
 }
@@ -123,9 +123,12 @@ impl Pacer {
 /// Watches the kernel's neighbor-table statistics for signs the sweep is
 /// outrunning it. Linux reports a full table to neither UDP senders (the
 /// datagram is dropped and `sendto` succeeds) nor TCP `connect()` (the SYN is
-/// retried later), but it counts every forced garbage collection, which
-/// evicts entries, and every time the table was full anyway, in
-/// `/proc/net/stat/arp_cache`. Elsewhere this does nothing.
+/// retried later), but it counts each time the table was full, in the
+/// `table_fulls` column of `/proc/net/stat/arp_cache`. That address then got
+/// no ARP request at all. Forced garbage collection (`forced_gc_runs`) is
+/// deliberately ignored: it runs routinely once the table passes
+/// `gc_thresh2` (512) for 5 s, and only reclaims failed entries and ones
+/// older than 5 s, which phase 2 has already read. Elsewhere this does nothing.
 struct ArpPressure {
     last: Option<u64>,
 }
@@ -135,7 +138,7 @@ impl ArpPressure {
         ArpPressure { last: arp_pressure_count() }
     }
 
-    /// True if the kernel has had to evict or refuse entries since the last call.
+    /// True if the kernel has refused new entries since the last call.
     fn rose(&mut self) -> bool {
         let now = arp_pressure_count();
         let rose = matches!((self.last, now), (Some(a), Some(b)) if b > a);
@@ -156,22 +159,16 @@ fn arp_pressure_count() -> Option<u64> {
     None
 }
 
-/// Sum `forced_gc_runs` and `table_fulls` over every CPU's row. The values
-/// are hexadecimal, and the header names the columns.
+/// Sum `table_fulls` over every CPU's row. The values are hexadecimal, and
+/// the header names the columns.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn parse_arp_stat(text: &str) -> Option<u64> {
     let mut lines = text.lines();
-    let header: Vec<&str> = lines.next()?.split_whitespace().collect();
-    let cols: Vec<usize> = ["forced_gc_runs", "table_fulls"]
-        .iter()
-        .map(|name| header.iter().position(|h| h == name))
-        .collect::<Option<_>>()?;
+    let col = lines.next()?.split_whitespace().position(|h| h == "table_fulls")?;
     let mut total = 0u64;
     for line in lines {
-        let fields: Vec<&str> = line.split_whitespace().collect();
-        for &c in &cols {
-            total = total.saturating_add(u64::from_str_radix(fields.get(c)?, 16).ok()?);
-        }
+        let field = line.split_whitespace().nth(col)?;
+        total = total.saturating_add(u64::from_str_radix(field, 16).ok()?);
     }
     Some(total)
 }
@@ -363,7 +360,7 @@ mod tests {
                     00000000         0000060a         00000002       00000000            00000001\n\
                     000000a7 000126d5 0000e726 00000001   0000000b 00000000 00031d0f   00000000         \
                     00000000         00000886         00000010       00000000            00000000\n";
-        assert_eq!(parse_arp_stat(text), Some(0x2 + 0x1 + 0x10));
+        assert_eq!(parse_arp_stat(text), Some(0x1)); // forced_gc_runs (0x2, 0x10) don't count
         assert_eq!(parse_arp_stat("entries allocs\n1 2\n"), None); // columns missing
     }
 
