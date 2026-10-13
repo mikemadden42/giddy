@@ -125,12 +125,17 @@ async fn run(
                 None => break,
             },
             Some(ev) = rx.recv() => {
+                // Apply everything that's queued before redrawing, and only
+                // re-sort if something besides scan progress came in.
+                let mut changed = ev.1.changes_devices();
                 app.on_scan(ev);
-                // Apply everything that's queued before redrawing.
                 while let Ok(ev) = rx.try_recv() {
+                    changed |= ev.1.changes_devices();
                     app.on_scan(ev);
                 }
-                app.rebuild_view();
+                if changed {
+                    app.rebuild_view();
+                }
             }
             _ = tick.tick() => app.on_tick(),
         }

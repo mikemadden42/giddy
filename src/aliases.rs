@@ -67,6 +67,33 @@ impl Aliases {
         for (mac, alias) in entries {
             let _ = writeln!(text, "{mac}\t{alias}");
         }
-        std::fs::write(path, text)
+        // Write a temporary file and rename it over the old one, so a crash
+        // or full disk mid-save can't leave the aliases file empty or cut off.
+        let tmp = path.with_file_name(format!("aliases.{}.tmp", std::process::id()));
+        std::fs::write(&tmp, text).and_then(|()| std::fs::rename(&tmp, path)).inspect_err(|_| {
+            let _ = std::fs::remove_file(&tmp);
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn saves_and_reloads() {
+        let dir = std::env::temp_dir().join(format!("giddy-aliases-test-{}", std::process::id()));
+        let path = dir.join("giddy").join("aliases");
+        let mut aliases = Aliases { path: Some(path.clone()), map: HashMap::new() };
+        let mac = MacAddr([2, 0, 0, 0, 0, 1]);
+        aliases.set(mac, "Office printer").unwrap();
+        aliases.set(MacAddr([2, 0, 0, 0, 0, 2]), "tab\there").unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(text, "02:00:00:00:00:01\tOffice printer\n02:00:00:00:00:02\ttab here\n");
+        // No temporary file left behind.
+        assert_eq!(std::fs::read_dir(path.parent().unwrap()).unwrap().count(), 1);
+        aliases.set(mac, "").unwrap();
+        assert!(!std::fs::read_to_string(&path).unwrap().contains("Office"));
+        let _ = std::fs::remove_dir_all(dir);
     }
 }
