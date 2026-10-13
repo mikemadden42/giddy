@@ -20,6 +20,7 @@ use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 use tokio::time::Instant;
 
+use super::arp::Entry;
 use super::banner;
 use super::{ScanEvent, Tx, connect_from};
 use crate::iface::{Cidr, Iface};
@@ -59,7 +60,9 @@ impl State {
 
 /// Spaces probe packets (UDP datagrams and TCP connection attempts) to at
 /// most `rate` per second, without bursting to catch up after a pause.
-/// Halves the rate when the OS signals back-pressure.
+/// Halves the rate when the OS signals back-pressure: a send error where the
+/// OS reports one, or (on Linux, where UDP drops and TCP retries silently)
+/// the kernel evicting or refusing neighbor entries; see [`ArpPressure`].
 struct Pacer {
     inner: Mutex<PacerState>,
 }
@@ -105,12 +108,72 @@ impl Pacer {
     }
 
     fn on_error(&self, e: &std::io::Error, tx: &Tx) {
-        if is_backpressure(e)
-            && let Some(rate) = self.back_off()
-        {
+        if is_backpressure(e) {
+            self.slow_down(tx);
+        }
+    }
+
+    fn slow_down(&self, tx: &Tx) {
+        if let Some(rate) = self.back_off() {
             let _ = tx.send(ScanEvent::Error(format!("Network is pushing back; sweep slowed to {rate} packets/s")));
         }
     }
+}
+
+/// Watches the kernel's neighbor-table statistics for signs the sweep is
+/// outrunning it. Linux reports a full table to neither UDP senders (the
+/// datagram is dropped and `sendto` succeeds) nor TCP `connect()` (the SYN is
+/// retried later), but it counts every forced garbage collection, which
+/// evicts entries, and every time the table was full anyway, in
+/// `/proc/net/stat/arp_cache`. Elsewhere this does nothing.
+struct ArpPressure {
+    last: Option<u64>,
+}
+
+impl ArpPressure {
+    fn new() -> Self {
+        ArpPressure { last: arp_pressure_count() }
+    }
+
+    /// True if the kernel has had to evict or refuse entries since the last call.
+    fn rose(&mut self) -> bool {
+        let now = arp_pressure_count();
+        let rose = matches!((self.last, now), (Some(a), Some(b)) if b > a);
+        if now.is_some() {
+            self.last = now;
+        }
+        rose
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn arp_pressure_count() -> Option<u64> {
+    parse_arp_stat(&std::fs::read_to_string("/proc/net/stat/arp_cache").ok()?)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn arp_pressure_count() -> Option<u64> {
+    None
+}
+
+/// Sum `forced_gc_runs` and `table_fulls` over every CPU's row. The values
+/// are hexadecimal, and the header names the columns.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn parse_arp_stat(text: &str) -> Option<u64> {
+    let mut lines = text.lines();
+    let header: Vec<&str> = lines.next()?.split_whitespace().collect();
+    let cols: Vec<usize> = ["forced_gc_runs", "table_fulls"]
+        .iter()
+        .map(|name| header.iter().position(|h| h == name))
+        .collect::<Option<_>>()?;
+    let mut total = 0u64;
+    for line in lines {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        for &c in &cols {
+            total = total.saturating_add(u64::from_str_radix(fields.get(c)?, 16).ok()?);
+        }
+    }
+    Some(total)
 }
 
 /// The OS is out of buffer space or neighbor-table room: we're sending
@@ -170,6 +233,7 @@ pub async fn run(iface: &Iface, tx: &Tx, state: &Arc<State>, rate: u32, range: O
     // reads its neighbor entries and starts TCP probes, while later chunks
     // are still being sent.
     let mut settling: VecDeque<(Instant, &[Ipv4Addr])> = VecDeque::new();
+    let mut pressure = ArpPressure::new();
     for chunk in targets.chunks(CHUNK) {
         for &ip in chunk {
             for port in UDP_PORTS {
@@ -181,6 +245,9 @@ pub async fn run(iface: &Iface, tx: &Tx, state: &Arc<State>, rate: u32, range: O
             if done.fetch_add(1, Ordering::Relaxed).is_multiple_of(PROGRESS_EVERY) {
                 report(tx, &done, &total);
             }
+        }
+        if pressure.rose() {
+            pacer.slow_down(tx);
         }
         settling.push_back((Instant::now() + ARP_SETTLE, chunk));
         while settling.front().is_some_and(|(due, _)| *due <= Instant::now()) {
@@ -197,11 +264,20 @@ pub async fn run(iface: &Iface, tx: &Tx, state: &Arc<State>, rate: u32, range: O
     Ok(())
 }
 
-/// The addresses in `chunk` that now have a MAC in the neighbor table. If
-/// the table can't be read, all of `chunk` is probed so TCP still covers it.
+/// The addresses in `chunk` that now have a MAC in the neighbor table.
+/// Returns all of `chunk`, so TCP still covers it, when the table can't be
+/// read or shows nothing on our subnet at all. A real table always has at
+/// least the gateway, so an empty one means we can't see it: macOS hides it
+/// from builds without the signed bundle ID, and a parser can miss every row
+/// of output it doesn't recognize.
 async fn resolved(iface: &Iface, chunk: &[Ipv4Addr]) -> Vec<Ipv4Addr> {
     let name = iface.name.clone();
-    let Ok(Ok(entries)) = tokio::task::spawn_blocking(move || super::arp::read_result(&name)).await else {
+    let entries = tokio::task::spawn_blocking(move || super::arp::read_result(&name)).await;
+    select_resolved(iface, chunk, entries.ok().and_then(Result::ok))
+}
+
+fn select_resolved(iface: &Iface, chunk: &[Ipv4Addr], entries: Option<Vec<Entry>>) -> Vec<Ipv4Addr> {
+    let Some(entries) = entries.filter(|e| e.iter().any(|e| iface.contains(e.ip))) else {
         return chunk.to_vec();
     };
     let known: HashSet<Ipv4Addr> = entries.into_iter().map(|e| e.ip).collect();
@@ -261,6 +337,34 @@ mod tests {
         assert_eq!(pacer.back_off(), Some(MIN_RATE));
         pacer.inner.lock().unwrap().slowed_at = None;
         assert_eq!(pacer.back_off(), None);
+    }
+
+    #[test]
+    fn falls_back_when_the_table_shows_nothing() {
+        let iface = Iface { name: "t".into(), ip: [10, 0, 0, 2].into(), prefix: 24, mac: None, gateway: None };
+        let chunk: Vec<Ipv4Addr> = (1..=4).map(|i| Ipv4Addr::new(10, 0, 0, i)).collect();
+        let entry = |last| Entry {
+            ip: Ipv4Addr::new(10, 0, 0, last),
+            mac: crate::device::MacAddr([2, 0, 0, 0, 0, last]),
+            active: true,
+        };
+        // A readable table: only resolved hosts are probed.
+        assert_eq!(select_resolved(&iface, &chunk, Some(vec![entry(1), entry(3)])), [chunk[0], chunk[2]]);
+        // Unreadable, or empty as on macOS without the signed bundle ID: probe them all.
+        assert_eq!(select_resolved(&iface, &chunk, None), chunk);
+        assert_eq!(select_resolved(&iface, &chunk, Some(vec![])), chunk);
+    }
+
+    #[test]
+    fn parses_arp_stat() {
+        let text = "entries  allocs   destroys hash_grows lookups  hits     res_failed rcv_probes_mcast \
+                    rcv_probes_ucast periodic_gc_runs forced_gc_runs unresolved_discards table_fulls\n\
+                    000000a7 00011367 00011fb5 00000000   00000001 00000000 00012252   00000000         \
+                    00000000         0000060a         00000002       00000000            00000001\n\
+                    000000a7 000126d5 0000e726 00000001   0000000b 00000000 00031d0f   00000000         \
+                    00000000         00000886         00000010       00000000            00000000\n";
+        assert_eq!(parse_arp_stat(text), Some(0x2 + 0x1 + 0x10));
+        assert_eq!(parse_arp_stat("entries allocs\n1 2\n"), None); // columns missing
     }
 
     #[test]

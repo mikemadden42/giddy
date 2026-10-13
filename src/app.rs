@@ -50,7 +50,13 @@ impl SortKey {
 pub enum Mode {
     Normal,
     Filter,
-    Alias(String),
+    /// Naming a device. Its MAC and IP are captured when the prompt opens,
+    /// since rows can move under the cursor while the user types.
+    Alias {
+        mac: MacAddr,
+        ip: Ipv4Addr,
+        input: String,
+    },
     Interfaces(usize),
     Help,
 }
@@ -320,7 +326,7 @@ impl App {
                 }
                 _ => {}
             },
-            Mode::Alias(input) => match key.code {
+            Mode::Alias { mac, ip, input } => match key.code {
                 KeyCode::Esc => self.mode = Mode::Normal,
                 KeyCode::Backspace => {
                     input.pop();
@@ -329,9 +335,9 @@ impl App {
                     input.push(c);
                 }
                 KeyCode::Enter => {
-                    let input = std::mem::take(input);
+                    let (mac, ip, input) = (*mac, *ip, std::mem::take(input));
                     self.mode = Mode::Normal;
-                    self.save_alias(&input);
+                    self.save_alias(mac, ip, &input);
                 }
                 _ => {}
             },
@@ -383,11 +389,16 @@ impl App {
                 self.toast("Rescanning…");
             }
             KeyCode::Char('i') => self.mode = Mode::Interfaces(self.iface),
-            KeyCode::Char('a') => match self.selected_device() {
-                Some(d) if d.mac.is_some() => self.mode = Mode::Alias(d.alias.clone().unwrap_or_default()),
-                Some(_) => self.toast("Can't alias a device without a known MAC address"),
-                None => {}
-            },
+            KeyCode::Char('a') => {
+                if let Some(d) = self.selected_device() {
+                    match d.mac {
+                        Some(mac) => {
+                            self.mode = Mode::Alias { mac, ip: d.ip, input: d.alias.clone().unwrap_or_default() };
+                        }
+                        None => self.toast("Can't alias a device without a known MAC address"),
+                    }
+                }
+            }
             KeyCode::Char('y') => {
                 if let Some(ip) = self.selected_device().map(|d| d.ip) {
                     self.copy(&ip.to_string());
@@ -403,8 +414,7 @@ impl App {
         }
     }
 
-    fn save_alias(&mut self, input: &str) {
-        let Some((ip, mac)) = self.selected_device().and_then(|d| Some((d.ip, d.mac?))) else { return };
+    fn save_alias(&mut self, mac: MacAddr, ip: Ipv4Addr, input: &str) {
         match self.aliases.set(mac, input) {
             Ok(()) => self.toast(if input.trim().is_empty() { "Alias cleared" } else { "Alias saved" }),
             Err(e) => self.toast(format!("Couldn't save alias: {e}")),
