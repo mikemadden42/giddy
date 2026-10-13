@@ -11,7 +11,7 @@
 
 use std::collections::{HashSet, VecDeque};
 use std::net::{Ipv4Addr, SocketAddrV4};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -45,11 +45,13 @@ const TCP_PORTS: &[u16] = &[80, 443, 22, 445, 62078];
 /// send. (NetBIOS on 137 gets a real query from the netbios module.)
 const UDP_PORTS: &[u16] = &[9];
 
-/// Services whose banners were already read, kept across cycles so each is
-/// only asked once per scan session.
+/// Kept across cycles for the whole scan session: services whose banners
+/// were already read, so each is only asked once, and whether we've already
+/// warned that `--sweep` doesn't fit this interface.
 #[derive(Default)]
 pub struct State {
     grabbed: Mutex<HashSet<(Ipv4Addr, u16)>>,
+    warned_range: AtomicBool,
 }
 
 impl State {
@@ -189,8 +191,10 @@ pub async fn run(iface: &Iface, tx: &Tx, state: &Arc<State>, rate: u32, range: O
     let targets = match range {
         Some(r) if iface.covers(r) => iface.targets_in(r),
         Some(r) => {
-            let _ =
-                tx.send(ScanEvent::Error(format!("--sweep {r} is not on {}; sweeping its default range", iface.name)));
+            if !state.warned_range.swap(true, Ordering::Relaxed) {
+                let msg = format!("--sweep {r} is not on {}; sweeping its default range", iface.name);
+                let _ = tx.send(ScanEvent::Error(msg));
+            }
             iface.sweep_targets()
         }
         None => iface.sweep_targets(),

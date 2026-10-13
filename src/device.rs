@@ -102,6 +102,11 @@ impl Sources {
     }
 }
 
+/// Most mDNS services or UPnP device types kept per device. Real devices
+/// advertise a handful; the cap stops one that announces endless made-up
+/// ones from growing memory without bound.
+const MAX_PER_DEVICE: usize = 32;
+
 #[derive(Clone, Default)]
 pub struct SsdpInfo {
     pub server: Option<String>,
@@ -223,7 +228,9 @@ impl Device {
         if let Some(model) = &rec.model {
             self.mdns_model.get_or_insert_with(|| model.clone());
         }
-        if let (Some(service), Some(instance)) = (&rec.service, &rec.instance) {
+        if let (Some(service), Some(instance)) = (&rec.service, &rec.instance)
+            && (self.services.len() < MAX_PER_DEVICE || self.services.contains_key(service))
+        {
             self.services.insert(service.clone(), instance.clone());
         }
         let candidate = rec.friendly.as_ref().map(|n| (3, n)).or_else(|| {
@@ -263,7 +270,9 @@ impl Device {
         if rec.location.is_some() {
             info.location.clone_from(&rec.location);
         }
-        if let Some(st) = &rec.st {
+        if let Some(st) = &rec.st
+            && self.ssdp_types.len() < MAX_PER_DEVICE
+        {
             self.ssdp_types.insert(st.clone());
         }
     }
@@ -454,6 +463,36 @@ mod tests {
         assert!(!is_useful_label("Login"));
         assert!(!is_useful_label("Index of /"));
         assert!(!is_useful_label("Restricted area"));
+    }
+
+    #[test]
+    fn announcements_are_capped_per_device() {
+        let mut d = Device::new([10, 0, 0, 9].into());
+        for i in 0..100 {
+            let rec = MdnsRecord {
+                ip: d.ip,
+                hostname: None,
+                instance: Some(format!("x{i}")),
+                service: Some(format!("_fake{i}._tcp")),
+                friendly: None,
+                model: None,
+            };
+            d.apply_mdns(&rec);
+            d.apply_ssdp(&SsdpRecord { ip: d.ip, server: None, location: None, st: Some(format!("urn:fake:{i}")) });
+        }
+        assert_eq!(d.services.len(), MAX_PER_DEVICE);
+        assert_eq!(d.ssdp_types.len(), MAX_PER_DEVICE);
+        // Known services still update past the cap.
+        let rec = MdnsRecord {
+            ip: d.ip,
+            hostname: None,
+            instance: Some("renamed".into()),
+            service: Some("_fake0._tcp".into()),
+            friendly: None,
+            model: None,
+        };
+        d.apply_mdns(&rec);
+        assert_eq!(d.services["_fake0._tcp"], "renamed");
     }
 
     #[test]

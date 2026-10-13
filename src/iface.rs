@@ -102,19 +102,17 @@ pub fn list() -> Vec<Iface> {
     let mut out: Vec<Iface> = addrs
         .into_iter()
         .filter(|i| !i.is_loopback())
-        .filter_map(|i| match i.addr {
-            if_addrs::IfAddr::V4(v4) => {
-                // At most 32, so the conversion can't fail.
-                let prefix = u8::try_from(u32::from(v4.netmask).leading_ones()).unwrap_or(32);
-                (prefix < 31 && !v4.ip.is_link_local()).then(|| Iface {
-                    mac: read_mac(&i.name),
-                    gateway: default_gateway(&i.name, v4.ip),
-                    name: i.name,
-                    ip: v4.ip,
-                    prefix,
-                })
-            }
-            if_addrs::IfAddr::V6(_) => None,
+        .filter_map(|i| {
+            let if_addrs::IfAddr::V4(v4) = &i.addr else { return None };
+            // At most 32, so the conversion can't fail.
+            let prefix = u8::try_from(u32::from(v4.netmask).leading_ones()).unwrap_or(32);
+            (prefix < 31 && !v4.ip.is_link_local()).then(|| Iface {
+                mac: read_mac(&i.name, adapter_id(&i)),
+                gateway: default_gateway(&i.name, v4.ip),
+                name: i.name.clone(),
+                ip: v4.ip,
+                prefix,
+            })
         })
         .collect();
     out.sort_by(|a, b| a.name.cmp(&b.name).then(a.ip.cmp(&b.ip)));
@@ -135,14 +133,61 @@ pub fn default_index(ifaces: &[Iface]) -> Option<usize> {
 }
 
 #[cfg(target_os = "linux")]
-fn read_mac(name: &str) -> Option<MacAddr> {
+fn read_mac(name: &str, _adapter: &str) -> Option<MacAddr> {
     let text = std::fs::read_to_string(format!("/sys/class/net/{name}/address")).ok()?;
     text.trim().parse().ok().filter(|m: &MacAddr| !m.is_zero())
 }
 
-#[cfg(not(target_os = "linux"))]
-fn read_mac(_name: &str) -> Option<MacAddr> {
+/// The adapter GUID on Windows, where `if_addrs` exposes it; empty elsewhere.
+#[cfg(windows)]
+fn adapter_id(i: &if_addrs::Interface) -> &str {
+    &i.adapter_name
+}
+
+#[cfg(not(windows))]
+fn adapter_id(_i: &if_addrs::Interface) -> &'static str {
+    ""
+}
+
+/// Windows names interfaces by a localizable friendly name, but `getmac /v`
+/// lists each adapter's GUID (in its transport name) beside its MAC.
+#[cfg(windows)]
+fn read_mac(_name: &str, adapter: &str) -> Option<MacAddr> {
+    let out = std::process::Command::new("getmac").args(["/v", "/fo", "csv", "/nh"]).output().ok()?;
+    parse_getmac(&String::from_utf8_lossy(&out.stdout), adapter)
+}
+
+/// macOS and the BSDs: `ifconfig <name>` prints an `ether aa:bb:…` line.
+#[cfg(all(unix, not(target_os = "linux")))]
+fn read_mac(name: &str, _adapter: &str) -> Option<MacAddr> {
+    let out = std::process::Command::new("ifconfig").arg(name).output().ok()?;
+    parse_ifconfig_ether(&String::from_utf8_lossy(&out.stdout))
+}
+
+#[cfg(not(any(unix, windows)))]
+fn read_mac(_name: &str, _adapter: &str) -> Option<MacAddr> {
     None
+}
+
+/// The MAC on the `getmac /v /fo csv /nh` row whose fields mention `adapter`
+/// (a GUID like `{…}`). Columns are localized, so match by content.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn parse_getmac(text: &str, adapter: &str) -> Option<MacAddr> {
+    if adapter.is_empty() {
+        return None;
+    }
+    text.lines().find_map(|line| {
+        let fields: Vec<&str> = line.trim().trim_matches('"').split("\",\"").collect();
+        if !fields.iter().any(|f| f.contains(adapter)) {
+            return None;
+        }
+        fields.iter().find_map(|f| f.parse::<MacAddr>().ok()).filter(|m| !m.is_zero())
+    })
+}
+
+#[cfg_attr(any(target_os = "linux", not(unix)), allow(dead_code))]
+fn parse_ifconfig_ether(text: &str) -> Option<MacAddr> {
+    text.lines().find_map(|line| line.trim().strip_prefix("ether ")?.split_whitespace().next()?.parse().ok())
 }
 
 #[cfg(target_os = "linux")]
@@ -198,6 +243,20 @@ fn default_gateway(name: &str, _ip: Ipv4Addr) -> Option<Ipv4Addr> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn own_mac_on_other_platforms() {
+        let getmac = "\"Wi-Fi\",\"Intel(R) Wi-Fi 6\",\"N/A\",\"Media disconnected\"\r\n\
+                      \"Ethernet\",\"USB GbE, rev 2\",\"02-00-00-00-00-01\",\"\\Device\\Tcpip_{1234-ABCD}\"\r\n";
+        assert_eq!(parse_getmac(getmac, "{1234-ABCD}").map(|m| m.to_string()).as_deref(), Some("02:00:00:00:00:01"));
+        assert_eq!(parse_getmac(getmac, "{FFFF}"), None);
+        assert_eq!(parse_getmac(getmac, ""), None);
+
+        let ifconfig = "en0: flags=8863<UP,BROADCAST> mtu 1500\n\toptions=6460<TSO4>\n\
+                        \tether 02:00:00:00:00:02\n\tinet 10.0.0.5 netmask 0xffffff00\n";
+        assert_eq!(parse_ifconfig_ether(ifconfig).map(|m| m.to_string()).as_deref(), Some("02:00:00:00:00:02"));
+        assert_eq!(parse_ifconfig_ether("lo0: flags=8049<UP>\n"), None);
+    }
 
     fn iface(ip: [u8; 4], prefix: u8) -> Iface {
         Iface { name: "test0".into(), ip: ip.into(), prefix, mac: None, gateway: None }
