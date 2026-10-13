@@ -80,7 +80,9 @@ pub async fn query(iface: &Iface, tx: &Tx) -> anyhow::Result<()> {
         // Ask known neighbors for their names via reverse lookups.
         if round == 1 {
             let dev = iface.name.clone();
-            let neighbors = tokio::task::spawn_blocking(move || super::arp::read(&dev)).await.unwrap_or_default();
+            let ip = iface.ip;
+            let neighbors =
+                tokio::task::spawn_blocking(move || super::arp::read(&dev, ip)).await.unwrap_or_default();
             next.extend(neighbors.iter().filter(|e| iface.contains(e.ip)).map(|e| (reverse_name(e.ip), dns::TYPE_PTR)));
         }
         send(std::mem::take(&mut next)).await;

@@ -108,7 +108,7 @@ pub fn list() -> Vec<Iface> {
                 let prefix = u8::try_from(u32::from(v4.netmask).leading_ones()).unwrap_or(32);
                 (prefix < 31 && !v4.ip.is_link_local()).then(|| Iface {
                     mac: read_mac(&i.name),
-                    gateway: default_gateway(&i.name),
+                    gateway: default_gateway(&i.name, v4.ip),
                     name: i.name,
                     ip: v4.ip,
                     prefix,
@@ -146,7 +146,7 @@ fn read_mac(_name: &str) -> Option<MacAddr> {
 }
 
 #[cfg(target_os = "linux")]
-fn default_gateway(name: &str) -> Option<Ipv4Addr> {
+fn default_gateway(name: &str, _ip: Ipv4Addr) -> Option<Ipv4Addr> {
     // Columns: Iface Destination Gateway Flags ... (addresses are little-endian hex)
     let text = std::fs::read_to_string("/proc/net/route").ok()?;
     text.lines().skip(1).find_map(|line| {
@@ -159,8 +159,35 @@ fn default_gateway(name: &str) -> Option<Ipv4Addr> {
     })
 }
 
-#[cfg(not(target_os = "linux"))]
-fn default_gateway(name: &str) -> Option<Ipv4Addr> {
+#[cfg(windows)]
+fn default_gateway(_name: &str, ip: Ipv4Addr) -> Option<Ipv4Addr> {
+    let out = std::process::Command::new("route").args(["print", "-4"]).output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    parse_windows_routes(&String::from_utf8_lossy(&out.stdout), ip)
+}
+
+/// Find the lowest-metric IPv4 default route attached to `interface_ip`.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn parse_windows_routes(text: &str, interface_ip: Ipv4Addr) -> Option<Ipv4Addr> {
+    text.lines()
+        .filter_map(|line| {
+            let cols: Vec<&str> = line.split_whitespace().collect();
+            if cols.len() < 5 || cols[0] != "0.0.0.0" || cols[1] != "0.0.0.0" {
+                return None;
+            }
+            let gateway: Ipv4Addr = cols[2].parse().ok()?;
+            let route_interface: Ipv4Addr = cols[3].parse().ok()?;
+            let metric: u32 = cols[4].parse().ok()?;
+            (route_interface == interface_ip).then_some((metric, gateway))
+        })
+        .min_by_key(|(metric, _)| *metric)
+        .map(|(_, gateway)| gateway)
+}
+
+#[cfg(all(not(target_os = "linux"), not(windows)))]
+fn default_gateway(name: &str, _ip: Ipv4Addr) -> Option<Ipv4Addr> {
     // BSD/macOS: `route -n get default` prints "gateway: x.x.x.x" and "interface: en0".
     let out = std::process::Command::new("route").args(["-n", "get", "default"]).output().ok()?;
     let text = String::from_utf8_lossy(&out.stdout);

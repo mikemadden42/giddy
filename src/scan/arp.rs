@@ -26,7 +26,8 @@ pub async fn poll(iface: Iface, tx: Tx, rdns: UnboundedSender<Ipv4Addr>) {
     loop {
         tick.tick().await;
         let name = iface.name.clone();
-        let Ok(entries) = tokio::task::spawn_blocking(move || read(&name)).await else { continue };
+        let ip = iface.ip;
+        let Ok(entries) = tokio::task::spawn_blocking(move || read(&name, ip)).await else { continue };
         for e in entries.into_iter().filter(|e| iface.contains(e.ip) && e.ip != iface.ip) {
             let changed = known.insert(e.ip, e.mac) != Some(e.mac);
             if changed {
@@ -43,13 +44,15 @@ fn usable(mac: MacAddr) -> bool {
     !mac.is_zero() && !mac.is_broadcast_or_multicast()
 }
 
-/// Read neighbor entries for interface `dev`.
-pub fn read(dev: &str) -> Vec<Entry> {
-    read_result(dev).unwrap_or_default()
+/// Read neighbor entries for interface `dev` and local IPv4 address `ip`.
+pub fn read(dev: &str, ip: Ipv4Addr) -> Vec<Entry> {
+    read_result(dev, ip).unwrap_or_default()
 }
 
 /// Read neighbor entries while preserving failures separately from an empty table.
-pub fn read_result(dev: &str) -> std::io::Result<Vec<Entry>> {
+pub fn read_result(dev: &str, ip: Ipv4Addr) -> std::io::Result<Vec<Entry>> {
+    #[cfg(not(windows))]
+    let _ = ip;
     #[cfg(target_os = "linux")]
     {
         // `ip neigh` exposes reachability state; /proc/net/arp is the fallback.
@@ -62,7 +65,7 @@ pub fn read_result(dev: &str) -> std::io::Result<Vec<Entry>> {
     #[cfg(windows)]
     {
         let _ = dev;
-        run("arp", &["-a"]).map(|text| parse_windows_arp(&text))
+        run("arp", &["-a"]).map(|text| parse_windows_arp(&text, ip))
     }
     // macOS hides the table from an `arp` we spawn, so ask the kernel directly.
     #[cfg(target_os = "macos")]
@@ -75,7 +78,7 @@ pub fn read_result(dev: &str) -> std::io::Result<Vec<Entry>> {
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos", windows, unix)))]
     {
-        let _ = dev;
+        let _ = (dev, ip);
         Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "neighbor table reading is unsupported"))
     }
 }
@@ -214,9 +217,22 @@ fn parse_bsd_arp(text: &str, dev: &str) -> Vec<Entry> {
 /// Windows localizes the type column, so identify complete neighbor rows by
 /// their address fields instead of matching the English word `dynamic`.
 #[cfg_attr(not(windows), allow(dead_code))]
-fn parse_windows_arp(text: &str) -> Vec<Entry> {
+fn parse_windows_arp(text: &str, selected_ip: Ipv4Addr) -> Vec<Entry> {
+    let mut selected_section = false;
     text.lines()
         .filter_map(|line| {
+            // Windows prints one section per interface address. The label may
+            // be localized, but the separator and IPv4 address are stable.
+            if let Some((header, _)) = line.split_once("---") {
+                selected_section = header
+                    .split_whitespace()
+                    .filter_map(|token| token.parse::<Ipv4Addr>().ok())
+                    .any(|ip| ip == selected_ip);
+                return None;
+            }
+            if !selected_section {
+                return None;
+            }
             let tokens: Vec<&str> = line.split_whitespace().collect();
             let ip = tokens.first()?.parse().ok()?;
             let mac: MacAddr = tokens.get(1)?.parse().ok()?;
@@ -290,6 +306,6 @@ mod tests {
         let win = "Interface: 10.0.0.5 --- 0x7\n  Internet Address      Physical Address      Type\n  \
                    10.0.0.1              3c-37-86-00-00-01     dynamic\n  \
                    10.0.0.255            ff-ff-ff-ff-ff-ff     static\n";
-        assert_eq!(parse_windows_arp(win).len(), 1);
+        assert_eq!(parse_windows_arp(win, Ipv4Addr::new(10, 0, 0, 5)).len(), 1);
     }
 }
