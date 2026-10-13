@@ -143,9 +143,16 @@ async fn run_once(mut app: App, mut rx: UnboundedReceiver<scan::Tagged>, format:
     let iface = app.current_iface().clone();
     eprintln!("scanning {} ({})…", iface.name, iface.cidr());
     app.start_scan();
+    // Warnings would be TUI toasts; with no TUI, print them instead.
+    let apply = |app: &mut App, ev: scan::Tagged| {
+        if let scan::ScanEvent::Error(msg) = &ev.1 {
+            eprintln!("giddy: {msg}");
+        }
+        app.on_scan(ev);
+    };
     while let Some(ev) = rx.recv().await {
         let done = matches!(ev.1, scan::ScanEvent::CycleFinished { .. });
-        app.on_scan(ev);
+        apply(&mut app, ev);
         if done {
             break;
         }
@@ -156,7 +163,7 @@ async fn run_once(mut app: App, mut rx: UnboundedReceiver<scan::Tagged>, format:
     loop {
         tokio::select! {
             () = &mut settle => break,
-            Some(ev) = rx.recv() => app.on_scan(ev),
+            Some(ev) = rx.recv() => apply(&mut app, ev),
         }
     }
     app.rebuild_view();
