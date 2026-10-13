@@ -284,22 +284,20 @@ impl App {
     /// Recompute the filtered/sorted view, keeping the selection on the same device.
     pub fn rebuild_view(&mut self) {
         let needle = self.filter.to_lowercase();
-        let mut view: Vec<&Device> =
-            self.devices.values().filter(|d| needle.is_empty() || matches_filter(d, &needle)).collect();
-        view.sort_by(|a, b| {
-            let ord = match self.sort {
-                SortKey::Ip => a.ip.cmp(&b.ip),
-                SortKey::Name => sort_text(a.display_name()).cmp(&sort_text(b.display_name())),
-                // Unknown types sort last.
-                SortKey::Type => (kind::classify(a).is_none(), kind::classify(a))
-                    .cmp(&(kind::classify(b).is_none(), kind::classify(b))),
-                SortKey::Manufacturer => sort_text(a.manufacturer()).cmp(&sort_text(b.manufacturer())),
-                SortKey::LastSeen => b.last_seen.cmp(&a.last_seen),
-            };
+        // Work out each device's sort value once, not on every comparison:
+        // classifying a device's type builds strings.
+        let mut view: Vec<(SortValue, Ipv4Addr)> = self
+            .devices
+            .values()
+            .filter(|d| needle.is_empty() || matches_filter(d, &needle))
+            .map(|d| (SortValue::of(self.sort, d), d.ip))
+            .collect();
+        view.sort_by(|(a, a_ip), (b, b_ip)| {
+            let ord = a.cmp(b);
             let ord = if self.sort_desc { ord.reverse() } else { ord };
-            ord.then(a.ip.cmp(&b.ip))
+            ord.then(a_ip.cmp(b_ip))
         });
-        self.view = view.into_iter().map(|d| d.ip).collect();
+        self.view = view.into_iter().map(|(_, ip)| ip).collect();
 
         let idx = self
             .pinned
@@ -504,9 +502,30 @@ fn matches_filter(d: &Device, needle: &str) -> bool {
     .any(|s| s.to_lowercase().contains(needle))
 }
 
-/// Sort key that puts devices with no value last.
-fn sort_text(s: Option<&str>) -> (bool, String) {
-    (s.is_none(), s.unwrap_or_default().to_lowercase())
+/// A device's value for the current sort column. Missing values sort last.
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+enum SortValue {
+    Ip(Ipv4Addr),
+    Text(bool, String),
+    Kind(bool, Option<kind::Kind>),
+    Seen(std::cmp::Reverse<Instant>),
+}
+
+impl SortValue {
+    fn of(key: SortKey, d: &Device) -> Self {
+        let text = |s: Option<&str>| SortValue::Text(s.is_none(), s.unwrap_or_default().to_lowercase());
+        match key {
+            SortKey::Ip => SortValue::Ip(d.ip),
+            SortKey::Name => text(d.display_name()),
+            SortKey::Manufacturer => text(d.manufacturer()),
+            SortKey::Type => {
+                let k = kind::classify(d);
+                SortValue::Kind(k.is_none(), k)
+            }
+            // Most recent first.
+            SortKey::LastSeen => SortValue::Seen(std::cmp::Reverse(d.last_seen)),
+        }
+    }
 }
 
 fn base64(data: &[u8]) -> String {
@@ -585,6 +604,42 @@ mod tests {
         app.devices.insert(ip, Device::new(ip));
         app.on_scan((0, ScanEvent::ReverseDns { ip, name: "printer".into() }));
         assert_eq!(app.devices[&ip].rdns.as_deref(), Some("printer"));
+    }
+
+    #[test]
+    fn sort_orders() {
+        use super::SortKey;
+        let mut app = app();
+        app.devices.clear();
+        let now = Instant::now();
+        let mut add = |last: u8, host: Option<&str>, ago: u64| {
+            let ip = Ipv4Addr::new(10, 0, 0, last);
+            let mut d = Device::new(ip);
+            d.mdns_host = host.map(String::from);
+            d.last_seen = now.checked_sub(Duration::from_secs(ago)).unwrap();
+            app.devices.insert(ip, d);
+        };
+        add(3, Some("kitchen-ipad"), 5); // tablet
+        add(1, None, 50); // no type, no name
+        add(2, Some("guest-iphone"), 1); // phone
+        let order = |app: &super::App| app.view.iter().map(|ip| ip.octets()[3]).collect::<Vec<_>>();
+
+        app.sort = SortKey::Ip;
+        app.rebuild_view();
+        assert_eq!(order(&app), [1, 2, 3]);
+        app.sort = SortKey::Name; // unnamed last
+        app.rebuild_view();
+        assert_eq!(order(&app), [2, 3, 1]);
+        app.sort = SortKey::Type; // phone < tablet, unknown last
+        app.rebuild_view();
+        assert_eq!(order(&app), [2, 3, 1]);
+        app.sort_desc = true;
+        app.rebuild_view();
+        assert_eq!(order(&app), [1, 3, 2]);
+        app.sort_desc = false;
+        app.sort = SortKey::LastSeen; // most recent first
+        app.rebuild_view();
+        assert_eq!(order(&app), [2, 3, 1]);
     }
 
     #[test]

@@ -131,6 +131,21 @@ pub enum ScanEvent {
     Error(String),
 }
 
+impl ScanEvent {
+    /// Whether this event can change the device list, as opposed to only
+    /// scan status (progress, task start/finish, cycle timing, warnings).
+    pub fn changes_devices(&self) -> bool {
+        !matches!(
+            self,
+            ScanEvent::SweepProgress { .. }
+                | ScanEvent::TaskStarted(_)
+                | ScanEvent::TaskFinished(_)
+                | ScanEvent::CycleFinished { .. }
+                | ScanEvent::Error(_)
+        )
+    }
+}
+
 pub type Tx = UnboundedSender<ScanEvent>;
 
 /// Events tagged with the generation of the scanner that produced them, so
