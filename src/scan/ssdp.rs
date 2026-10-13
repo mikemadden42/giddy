@@ -1,7 +1,7 @@
 //! SSDP / UPnP discovery. M-SEARCH replies are unicast back to our
 //! ephemeral port; device description XML is fetched over plain HTTP.
 
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::time::Duration;
 
@@ -15,11 +15,31 @@ const GROUP: Ipv4Addr = Ipv4Addr::new(239, 255, 255, 250);
 const PORT: u16 = 1900;
 const SEARCH_TARGETS: &[&str] = &["ssdp:all", "upnp:rootdevice"];
 const MAX_DESCRIPTION: usize = 256 * 1024;
+const MAX_DESCRIPTION_FETCHES: usize = 16;
+const MAX_CACHED_LOCATIONS: usize = 512;
 
-/// Description URLs already fetched, kept across cycles.
+/// Description URLs recently fetched, kept across cycles.
 #[derive(Default)]
 pub struct State {
     fetched: HashSet<String>,
+    fetch_order: VecDeque<String>,
+}
+
+impl State {
+    fn remember(&mut self, location: &str) -> bool {
+        if self.fetched.contains(location) {
+            return false;
+        }
+        if self.fetch_order.len() == MAX_CACHED_LOCATIONS
+            && let Some(expired) = self.fetch_order.pop_front()
+        {
+            self.fetched.remove(&expired);
+        }
+        let location = location.to_string();
+        self.fetched.insert(location.clone());
+        self.fetch_order.push_back(location);
+        true
+    }
 }
 
 pub async fn search(iface: &Iface, tx: &Tx, state: &mut State) -> anyhow::Result<()> {
@@ -36,15 +56,18 @@ pub async fn search(iface: &Iface, tx: &Tx, state: &mut State) -> anyhow::Result
         recv_for(&sock, Duration::from_millis(2000), |buf, src| {
             if let Some(rec) = handle(buf, src, iface, tx)
                 && let Some(loc) = rec.location
-                && state.fetched.insert(loc.clone())
             {
-                let (tx, iface) = (tx.clone(), iface.clone());
-                fetches.spawn(async move {
-                    let fetch = describe(&loc, rec.ip, &iface);
-                    if let Ok(Ok(desc)) = tokio::time::timeout(Duration::from_secs(4), fetch).await {
-                        let _ = tx.send(ScanEvent::SsdpDescription(desc));
-                    }
-                });
+                // Completed tasks still occupy a JoinSet slot until reaped.
+                while fetches.try_join_next().is_some() {}
+                if fetches.len() < MAX_DESCRIPTION_FETCHES && state.remember(&loc) {
+                    let (tx, iface) = (tx.clone(), iface.clone());
+                    fetches.spawn(async move {
+                        let fetch = describe(&loc, rec.ip, &iface);
+                        if let Ok(Ok(desc)) = tokio::time::timeout(Duration::from_secs(4), fetch).await {
+                            let _ = tx.send(ScanEvent::SsdpDescription(desc));
+                        }
+                    });
+                }
             }
         })
         .await;
