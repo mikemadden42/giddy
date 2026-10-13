@@ -45,18 +45,24 @@ fn usable(mac: MacAddr) -> bool {
 
 /// Read neighbor entries for interface `dev`.
 pub fn read(dev: &str) -> Vec<Entry> {
+    read_result(dev).unwrap_or_default()
+}
+
+/// Read neighbor entries while preserving failures separately from an empty table.
+pub fn read_result(dev: &str) -> std::io::Result<Vec<Entry>> {
     #[cfg(target_os = "linux")]
     {
         // `ip neigh` exposes reachability state; /proc/net/arp is the fallback.
-        if let Some(entries) = run("ip", &["-4", "neigh", "show", "dev", dev]).map(|t| parse_ip_neigh(&t)) {
-            return entries;
+        if let Ok(text) = run("ip", &["-4", "neigh", "show", "dev", dev]) {
+            return Ok(parse_ip_neigh(&text));
         }
-        std::fs::read_to_string("/proc/net/arp").map(|t| parse_proc_arp(&t, dev)).unwrap_or_default()
+        let text = std::fs::read_to_string("/proc/net/arp")?;
+        Ok(parse_proc_arp(&text, dev))
     }
     #[cfg(windows)]
     {
         let _ = dev;
-        run("arp", &["-a"]).map(|t| parse_windows_arp(&t)).unwrap_or_default()
+        run("arp", &["-a"]).map(|text| parse_windows_arp(&text))
     }
     // macOS hides the table from an `arp` we spawn, so ask the kernel directly.
     #[cfg(target_os = "macos")]
@@ -65,34 +71,43 @@ pub fn read(dev: &str) -> Vec<Entry> {
     }
     #[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
     {
-        run("arp", &["-an"]).map(|t| parse_bsd_arp(&t, dev)).unwrap_or_default()
+        run("arp", &["-an"]).map(|text| parse_bsd_arp(&text, dev))
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows, unix)))]
+    {
+        let _ = dev;
+        Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "neighbor table reading is unsupported"))
     }
 }
 
 /// What `arp -an` does: fetch the `RTF_LLINFO` routes via `sysctl(NET_RT_FLAGS)`.
 #[cfg(target_os = "macos")]
-fn sysctl_arp(dev: &str) -> Vec<Entry> {
-    let Ok(name) = std::ffi::CString::new(dev) else { return Vec::new() };
+fn sysctl_arp(dev: &str) -> std::io::Result<Vec<Entry>> {
+    let name = std::ffi::CString::new(dev)
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "interface name contains NUL"))?;
     // SAFETY: `name` is NUL-terminated.
     let raw_index = unsafe { libc::if_nametoindex(name.as_ptr()) };
     // 0 means no such interface; route messages carry the index as a u16.
-    let Ok(index @ 1..) = u16::try_from(raw_index) else { return Vec::new() };
+    let index = u16::try_from(raw_index)
+        .ok()
+        .filter(|index| *index != 0)
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "interface not found"))?;
     let mut mib = [libc::CTL_NET, libc::PF_ROUTE, 0, libc::AF_INET, libc::NET_RT_FLAGS, libc::RTF_LLINFO];
     let null = std::ptr::null_mut();
     let mut len = 0;
     // SAFETY: a null buffer asks only for the required size.
     if unsafe { libc::sysctl(mib.as_mut_ptr(), 6, null, &raw mut len, null, 0) } != 0 {
-        return Vec::new();
+        return Err(std::io::Error::last_os_error());
     }
     // Headroom in case the table grows between the two calls.
     let mut buf = vec![0u8; len * 2];
     len = buf.len();
     // SAFETY: `buf` is writable for `len` bytes.
     if unsafe { libc::sysctl(mib.as_mut_ptr(), 6, buf.as_mut_ptr().cast(), &raw mut len, null, 0) } != 0 {
-        return Vec::new();
+        return Err(std::io::Error::last_os_error());
     }
     buf.truncate(len);
-    parse_rt_msgs(&buf, index)
+    Ok(parse_rt_msgs(&buf, index))
 }
 
 /// Walk `rt_msghdr` records on interface `if_index`. Each header is followed
@@ -133,9 +148,12 @@ fn parse_rt_msgs(mut buf: &[u8], if_index: u16) -> Vec<Entry> {
 }
 #[cfg_attr(target_os = "macos", allow(dead_code))]
 #[cfg_attr(not(any(target_os = "linux", unix, windows)), allow(dead_code))]
-fn run(cmd: &str, args: &[&str]) -> Option<String> {
-    let out = std::process::Command::new(cmd).args(args).output().ok()?;
-    out.status.success().then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+fn run(cmd: &str, args: &[&str]) -> std::io::Result<String> {
+    let out = std::process::Command::new(cmd).args(args).output()?;
+    if !out.status.success() {
+        return Err(std::io::Error::other(format!("{cmd} exited with {}", out.status)));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
 /// `10.0.0.1 lladdr 3c:37:86:00:00:01 router REACHABLE`

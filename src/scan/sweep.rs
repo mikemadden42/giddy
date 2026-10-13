@@ -198,14 +198,12 @@ pub async fn run(iface: &Iface, tx: &Tx, state: &Arc<State>, rate: u32, range: O
 }
 
 /// The addresses in `chunk` that now have a MAC in the neighbor table. If
-/// the table can't be read at all (macOS without the signed bundle ID), all
-/// of `chunk`, so TCP probing still covers it.
+/// the table can't be read, all of `chunk` is probed so TCP still covers it.
 async fn resolved(iface: &Iface, chunk: &[Ipv4Addr]) -> Vec<Ipv4Addr> {
     let name = iface.name.clone();
-    let entries = tokio::task::spawn_blocking(move || super::arp::read(&name)).await.unwrap_or_default();
-    if entries.is_empty() {
+    let Ok(Ok(entries)) = tokio::task::spawn_blocking(move || super::arp::read_result(&name)).await else {
         return chunk.to_vec();
-    }
+    };
     let known: HashSet<Ipv4Addr> = entries.into_iter().map(|e| e.ip).collect();
     chunk.iter().copied().filter(|ip| known.contains(ip)).collect()
 }
