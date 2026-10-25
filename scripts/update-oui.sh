@@ -17,4 +17,4 @@ awk -F'\t' '
     if (bits % 4 != 0 || name == "") next
     printf "%s\t%s\n", substr(hex, 1, bits / 4), name
   }' "$tmp" | LC_ALL=C sort -u | gzip -9n > data/oui.tsv.gz
-echo "wrote data/oui.tsv.gz ($(zcat data/oui.tsv.gz | wc -l) entries)"
+echo "wrote data/oui.tsv.gz ($(gzip -dc data/oui.tsv.gz | wc -l) entries)"
