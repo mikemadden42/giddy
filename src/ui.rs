@@ -85,6 +85,7 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
                 Task::Mdns => "mDNS".into(),
                 Task::Ssdp => "SSDP".into(),
                 Task::NetBios => "NetBIOS".into(),
+                Task::Ubiquiti => "Ubiquiti".into(),
             })
             .collect();
         right.push(Span::raw(tasks.join(" · ")));
@@ -177,7 +178,7 @@ fn draw_table(f: &mut Frame, app: &mut App, area: Rect) {
     }
     if wide {
         header.push("Via");
-        widths.push(Constraint::Length(5));
+        widths.push(Constraint::Length(6));
     }
     header.push("Seen");
     widths.push(Constraint::Length(5));
@@ -272,6 +273,7 @@ fn sources_line(d: &Device) -> Line<'static> {
         badge(Sources::SSDP, "U", Color::Magenta),
         badge(Sources::TCP, "T", Color::Yellow),
         badge(Sources::NETBIOS, "N", Color::Red),
+        badge(Sources::UBIQUITI, "D", Color::Cyan),
     ])
 }
 
@@ -307,6 +309,10 @@ fn detail_lines(app: &App) -> Vec<Line<'static>> {
     field("mDNS host", d.mdns_host.as_ref().map(|h| format!("{h}.local")));
     field("NetBIOS name", d.netbios_name.clone());
     field("Workgroup", d.workgroup.clone());
+    if let Some(ubnt) = &d.ubnt {
+        field("UniFi name", ubnt.hostname.clone());
+        field("Firmware", ubnt.firmware.clone());
+    }
     field("DNS name", d.rdns.clone());
     if let Some(ssdp) = &d.ssdp {
         field("UPnP name", ssdp.friendly_name.clone());

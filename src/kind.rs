@@ -176,7 +176,7 @@ fn from_names(d: &Device) -> Option<Kind> {
         (&["apple tv", "appletv", "roku", "chromecast", "fire tv", "firetv", "shield", "tv"], Kind::Tv),
         (&["homepod", "echo", "sonos", "speaker", "soundbar"], Kind::Speaker),
         (&["xbox", "playstation", "ps4", "ps5", "nintendo"], Kind::Console),
-        (&["camera", "doorbell", "cam", "ipcam"], Kind::Camera),
+        (&["camera", "doorbell", "cam", "ipcam", "uvc"], Kind::Camera),
         (&["diskstation", "synology", "qnap", "nas"], Kind::Storage),
         (&["thermostat", "plug", "bulb", "hue", "lamp"], Kind::SmartHome),
     ];

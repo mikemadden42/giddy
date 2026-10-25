@@ -10,6 +10,7 @@ mod netbios;
 mod rdns;
 mod ssdp;
 mod sweep;
+mod ubnt;
 
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::time::Duration;
@@ -84,12 +85,23 @@ pub struct NetBiosRecord {
     pub mac: Option<MacAddr>,
 }
 
+/// What a Ubiquiti device says about itself in a discovery reply.
+#[derive(Debug, Clone)]
+pub struct UbntRecord {
+    pub ip: Ipv4Addr,
+    pub hostname: Option<String>,
+    pub model: Option<String>,
+    pub firmware: Option<String>,
+    pub mac: Option<MacAddr>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Task {
     Sweep,
     Mdns,
     Ssdp,
     NetBios,
+    Ubiquiti,
 }
 
 #[derive(Debug, Clone)]
@@ -110,6 +122,7 @@ pub enum ScanEvent {
     Ssdp(SsdpRecord),
     SsdpDescription(SsdpDescription),
     NetBios(NetBiosRecord),
+    Ubiquiti(UbntRecord),
     /// What a service on an open port said about itself.
     Banner {
         ip: Ipv4Addr,
@@ -193,7 +206,8 @@ pub async fn run(iface: Iface, cfg: Config, generation: u64, out: UnboundedSende
         };
         let mdns = tracked(&tx, Task::Mdns, mdns::query(&iface, &tx));
         let ssdp = tracked(&tx, Task::Ssdp, ssdp::search(&iface, &tx, &mut ssdp_state));
-        tokio::join!(sweep_then_netbios, mdns, ssdp);
+        let ubnt = tracked(&tx, Task::Ubiquiti, ubnt::query(&iface, &tx));
+        tokio::join!(sweep_then_netbios, mdns, ssdp, ubnt);
         let _ = tx.send(ScanEvent::CycleFinished { next_in: cfg.interval });
         tokio::time::sleep(cfg.interval).await;
     }
