@@ -57,6 +57,11 @@ impl Iface {
         Self::mask_for(self.prefix)
     }
 
+    /// The subnet's directed broadcast address.
+    pub fn broadcast(&self) -> Ipv4Addr {
+        Ipv4Addr::from(u32::from(self.ip) | !self.mask())
+    }
+
     pub fn contains(&self, ip: Ipv4Addr) -> bool {
         u32::from(ip) & self.mask() == u32::from(self.ip) & self.mask()
     }

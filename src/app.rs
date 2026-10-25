@@ -239,6 +239,7 @@ impl App {
             ScanEvent::Ssdp(rec) => device_entry(devices, iface, rec.ip).apply_ssdp(&rec),
             ScanEvent::SsdpDescription(desc) => device_entry(devices, iface, desc.ip).apply_ssdp_description(&desc),
             ScanEvent::NetBios(rec) => device_entry(devices, iface, rec.ip).apply_netbios(&rec),
+            ScanEvent::Ubiquiti(rec) => device_entry(devices, iface, rec.ip).apply_ubnt(&rec),
             // Late answers for a row that's since been pruned shouldn't bring it back.
             ScanEvent::Banner { ip, banner } => {
                 if let Some(dev) = devices.get_mut(&ip) {

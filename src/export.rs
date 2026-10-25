@@ -76,6 +76,14 @@ struct DeviceJson<'a> {
     upnp: Option<UpnpJson<'a>>,
     web: Option<WebJson<'a>>,
     ssh: Option<&'a str>,
+    ubiquiti: Option<UbiquitiJson<'a>>,
+}
+
+#[derive(Serialize)]
+struct UbiquitiJson<'a> {
+    hostname: Option<&'a str>,
+    model: Option<&'a str>,
+    firmware: Option<&'a str>,
 }
 
 #[derive(Serialize)]
@@ -141,6 +149,11 @@ impl<'a> DeviceJson<'a> {
                 title: h.title.as_deref(),
             }),
             ssh: d.ssh_banner.as_deref(),
+            ubiquiti: d.ubnt.as_ref().map(|u| UbiquitiJson {
+                hostname: u.hostname.as_deref(),
+                model: u.model.as_deref(),
+                firmware: u.firmware.as_deref(),
+            }),
         }
     }
 }

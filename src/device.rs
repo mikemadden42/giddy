@@ -7,7 +7,7 @@ use std::str::FromStr;
 use std::time::Instant;
 
 use crate::oui;
-use crate::scan::{Banner, HttpInfo, MdnsRecord, NetBiosRecord, SsdpDescription, SsdpRecord};
+use crate::scan::{Banner, HttpInfo, MdnsRecord, NetBiosRecord, SsdpDescription, SsdpRecord, UbntRecord};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct MacAddr(pub [u8; 6]);
@@ -73,6 +73,7 @@ impl Sources {
     pub const SSDP: Sources = Sources(4);
     pub const TCP: Sources = Sources(8);
     pub const NETBIOS: Sources = Sources(16);
+    pub const UBIQUITI: Sources = Sources(32);
 
     pub fn insert(&mut self, other: Sources) {
         self.0 |= other.0;
@@ -83,12 +84,13 @@ impl Sources {
     }
 
     /// (flag, machine id, display label) for every source.
-    const ALL: [(Sources, &'static str, &'static str); 5] = [
+    const ALL: [(Sources, &'static str, &'static str); 6] = [
         (Sources::ARP, "arp", "ARP"),
         (Sources::MDNS, "mdns", "mDNS"),
         (Sources::SSDP, "ssdp", "SSDP"),
         (Sources::TCP, "tcp", "TCP"),
         (Sources::NETBIOS, "netbios", "NetBIOS"),
+        (Sources::UBIQUITI, "ubiquiti", "Ubiquiti"),
     ];
 
     /// Lowercase ids of the sources present, for export.
@@ -106,6 +108,14 @@ impl Sources {
 /// advertise a handful; the cap stops one that announces endless made-up
 /// ones from growing memory without bound.
 const MAX_PER_DEVICE: usize = 32;
+
+/// From a Ubiquiti discovery reply.
+#[derive(Clone, Default)]
+pub struct UbntInfo {
+    pub hostname: Option<String>,
+    pub model: Option<String>,
+    pub firmware: Option<String>,
+}
 
 #[derive(Clone, Default)]
 pub struct SsdpInfo {
@@ -133,6 +143,7 @@ pub struct Device {
     pub rdns: Option<String>,
     pub netbios_name: Option<String>,
     pub workgroup: Option<String>,
+    pub ubnt: Option<UbntInfo>,
     pub http: Option<HttpInfo>,
     pub ssh_banner: Option<String>,
     pub open_ports: BTreeSet<u16>,
@@ -160,6 +171,7 @@ impl Device {
             rdns: None,
             netbios_name: None,
             workgroup: None,
+            ubnt: None,
             http: None,
             ssh_banner: None,
             open_ports: BTreeSet::new(),
@@ -189,6 +201,7 @@ impl Device {
             .or(self.mdns_name.as_ref().map(|(_, n)| n.as_str()))
             .or(self.ssdp.as_ref().and_then(|s| s.friendly_name.as_deref()))
             .or(self.mdns_host.as_deref())
+            .or(self.ubnt.as_ref().and_then(|u| u.hostname.as_deref()))
             .or(self.netbios_name.as_deref())
             .or(self.rdns.as_deref())
             .or(self.web_label())
@@ -216,7 +229,10 @@ impl Device {
     }
 
     pub fn model(&self) -> Option<&str> {
-        self.mdns_model.as_deref().or(self.ssdp.as_ref().and_then(|s| s.model.as_deref()))
+        self.mdns_model
+            .as_deref()
+            .or(self.ssdp.as_ref().and_then(|s| s.model.as_deref()))
+            .or(self.ubnt.as_ref().and_then(|u| u.model.as_deref()))
     }
 
     pub fn apply_mdns(&mut self, rec: &MdnsRecord) {
@@ -252,6 +268,24 @@ impl Device {
         if rec.name.is_some() {
             self.netbios_name.clone_from(&rec.name);
             self.workgroup.clone_from(&rec.group);
+        }
+        if self.mac.is_none()
+            && let Some(mac) = rec.mac
+        {
+            self.set_mac(mac);
+        }
+    }
+
+    pub fn apply_ubnt(&mut self, rec: &UbntRecord) {
+        self.sources.insert(Sources::UBIQUITI);
+        self.touch();
+        let info = self.ubnt.get_or_insert_with(Default::default);
+        for (slot, value) in
+            [(&mut info.hostname, &rec.hostname), (&mut info.model, &rec.model), (&mut info.firmware, &rec.firmware)]
+        {
+            if value.is_some() {
+                slot.clone_from(value);
+            }
         }
         if self.mac.is_none()
             && let Some(mac) = rec.mac
