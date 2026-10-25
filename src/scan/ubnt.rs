@@ -21,9 +21,12 @@ const REQUESTS: [[u8; 4]; 2] = [[1, 0, 0, 0], [2, 8, 0, 0]];
 const TLV_MAC: u8 = 0x01;
 const TLV_FIRMWARE: u8 = 0x03;
 const TLV_HOSTNAME: u8 = 0x0b;
-const TLV_PLATFORM: u8 = 0x0c;
-const TLV_MODEL: u8 = 0x14;
-const TLV_MODEL_SHORT: u8 = 0x15;
+// Product, model type and model (names as in Wireshark's UBDP dissector).
+// Firmware differs in which it sends and whether it holds a code like
+// `U7PG2` or a full name like `UAP-AC-Pro-Gen2`.
+const TLV_PRODUCT: u8 = 0x0c;
+const TLV_MODEL_TYPE: u8 = 0x14;
+const TLV_MODEL: u8 = 0x15;
 
 pub async fn query(iface: &Iface, tx: &Tx) -> anyhow::Result<()> {
     let sock = UdpSocket::bind(SocketAddrV4::new(iface.ip, 0)).await?;
@@ -73,12 +76,14 @@ fn parse_response(buf: &[u8], ip: Ipv4Addr) -> Option<UbntRecord> {
             TLV_FIRMWARE => rec.firmware = text(),
             TLV_HOSTNAME => rec.hostname = text(),
             TLV_MODEL => models[0] = text(),
-            TLV_MODEL_SHORT => models[1] = text(),
-            TLV_PLATFORM => models[2] = text(),
+            TLV_MODEL_TYPE => models[1] = text(),
+            TLV_PRODUCT => models[2] = text(),
             _ => {}
         }
     }
-    rec.model = models.into_iter().flatten().next();
+    // The longest is the most descriptive; on a tie, the earliest in
+    // model, model type, product order.
+    rec.model = models.into_iter().flatten().rev().max_by_key(String::len);
     (rec.hostname.is_some() || rec.model.is_some() || rec.mac.is_some()).then_some(rec)
 }
 
@@ -111,8 +116,9 @@ mod tests {
                 tlv(0x02, &[0x80, 0x2a, 0xa8, 0x89, 0xb7, 0xe7, 172, 16, 26, 109]),
                 tlv(TLV_FIRMWARE, b"BZ.qca956x.v6.6.77.15402.240104.1543"),
                 tlv(TLV_HOSTNAME, b"chapel-uap"),
-                tlv(TLV_PLATFORM, b"U7PG2"),
-                tlv(TLV_MODEL, b"UAP-AC-Pro-Gen2"),
+                tlv(TLV_PRODUCT, b"U7PG2"),
+                tlv(TLV_MODEL_TYPE, b"UAP-AC-Pro-Gen2"),
+                tlv(TLV_MODEL, b"U7PG2"),
             ],
         );
         let rec = parse_response(&buf, ip).unwrap();
@@ -121,9 +127,14 @@ mod tests {
         assert_eq!(rec.firmware.as_deref(), Some("BZ.qca956x.v6.6.77.15402.240104.1543"));
         assert_eq!(rec.mac.unwrap().to_string(), "80:2a:a8:89:b7:e7");
 
-        // The platform code stands in when no model field is sent.
-        let buf = packet(2, &[tlv(TLV_PLATFORM, b"U7PG2")]);
+        // A code stands in when that's all there is.
+        let buf = packet(2, &[tlv(TLV_PRODUCT, b"U7PG2")]);
         assert_eq!(parse_response(&buf, ip).unwrap().model.as_deref(), Some("U7PG2"));
+        // The longest wins whichever field it's in; ties go to Model.
+        let buf = packet(2, &[tlv(TLV_PRODUCT, b"USW-Pro-24"), tlv(TLV_MODEL, b"US24PRO")]);
+        assert_eq!(parse_response(&buf, ip).unwrap().model.as_deref(), Some("USW-Pro-24"));
+        let buf = packet(2, &[tlv(TLV_PRODUCT, b"AAAA"), tlv(TLV_MODEL, b"BBBB")]);
+        assert_eq!(parse_response(&buf, ip).unwrap().model.as_deref(), Some("BBBB"));
     }
 
     #[test]
