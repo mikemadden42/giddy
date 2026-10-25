@@ -13,6 +13,7 @@ pub enum Kind {
     Tablet,
     /// An iOS device we can't tell apart (phone or tablet).
     Mobile,
+    Watch,
     Tv,
     Speaker,
     Console,
@@ -31,6 +32,7 @@ impl Kind {
             Kind::Phone => "phone",
             Kind::Tablet => "tablet",
             Kind::Mobile => "mobile",
+            Kind::Watch => "watch",
             Kind::Tv => "tv",
             Kind::Speaker => "speaker",
             Kind::Console => "console",
@@ -65,6 +67,7 @@ fn from_apple_model(d: &Device) -> Option<Kind> {
         ("iPhone", Kind::Phone),
         ("iPad", Kind::Tablet),
         ("iPod", Kind::Mobile),
+        ("Watch", Kind::Watch),
         ("AppleTV", Kind::Tv),
         ("AudioAccessory", Kind::Speaker), // HomePod
         ("Mac", Kind::Computer),           // Mac, MacBook*, Macmini, MacPro
@@ -165,6 +168,7 @@ fn from_names(d: &Device) -> Option<Kind> {
     let table: &[(&[&str], Kind)] = &[
         (&["iphone", "android", "galaxy", "pixel"], Kind::Phone),
         (&["ipad", "tablet", "kindle"], Kind::Tablet),
+        (&["watch"], Kind::Watch),
         (&["orbi", "satellite", "extender", "access point", "eero", "mesh", "repeater"], Kind::Network),
         (&["router", "gateway"], Kind::Router),
         (&["macbook", "imac", "mac mini", "macmini", "laptop", "desktop", "thinkpad", "pc"], Kind::Computer),
@@ -237,6 +241,8 @@ mod tests {
         assert_eq!(classify(&d), Some(Kind::Computer));
         d.mdns_model = Some("AudioAccessory5,1".into());
         assert_eq!(classify(&d), Some(Kind::Speaker));
+        d.mdns_model = Some("Watch6,1".into());
+        assert_eq!(classify(&d), Some(Kind::Watch));
     }
 
     #[test]
@@ -259,6 +265,9 @@ mod tests {
         assert_eq!(classify(&d), None);
         d.mdns_host = Some("living-room-tv".into());
         assert_eq!(classify(&d), Some(Kind::Tv));
+        d.mdns_host = None;
+        d.rdns = Some("michaelplewatch.mpcnet".into());
+        assert_eq!(classify(&d), Some(Kind::Watch));
     }
 
     #[test]

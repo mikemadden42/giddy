@@ -99,10 +99,12 @@ fn parse_http(resp: &str) -> HttpInfo {
         let len = v[start..].find('"')?;
         Some(clean(&v[start..start + len], 80))
     });
+    // A redirect's body is a stub ("301 Moved Permanently"), not the device's page.
+    let redirect = head.split_whitespace().nth(1).is_some_and(|s| s.starts_with('3'));
     HttpInfo {
         server: header(head, "Server").map(|s| clean(s, 80)),
         realm: realm.filter(|r| !r.is_empty()),
-        title: title(body),
+        title: if redirect { None } else { title(body) },
     }
 }
 
@@ -173,6 +175,9 @@ mod tests {
         let resp = "HTTP/1.1 200 OK\r\n\r\n<HTML><Title lang=en>\n  Living Room &amp;\tDen </TITLE>";
         assert_eq!(parse_http(resp).title.as_deref(), Some("Living Room & Den"));
         assert_eq!(parse_http("garbage").title, None);
+        let moved = "HTTP/1.1 301 Moved Permanently\r\nServer: nginx\r\n\r\n<title>301 Moved Permanently</title>";
+        assert_eq!(parse_http(moved).title, None);
+        assert_eq!(parse_http(moved).server.as_deref(), Some("nginx"));
     }
 
     #[test]

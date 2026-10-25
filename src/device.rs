@@ -373,23 +373,48 @@ pub fn is_useful_label(s: &str) -> bool {
         && !looks_opaque(s)
 }
 
-/// True for machine-generated identifiers (UUIDs, long hex hashes, MACs)
-/// that make poor display names, including names with a UUID embedded,
-/// like Android's `nearby-presence-nsd-<uuid>`.
+/// True for machine-generated identifiers (UUIDs, long hex hashes, MACs,
+/// random tokens) that make poor display names, including names with a UUID
+/// embedded, like Android's `nearby-presence-nsd-<uuid>`.
 pub fn looks_opaque(name: &str) -> bool {
     let core: String = name.chars().filter(|c| !matches!(c, '-' | ':' | '_')).collect();
     let hex = core.chars().all(|c| c.is_ascii_hexdigit());
-    (hex && core.len() >= 12) || core.is_empty() || contains_uuid(name)
+    (hex && core.len() >= 12)
+        || core.is_empty()
+        || contains_uuid(name)
+        || looks_random(name)
+        || is_android_default_host(name)
 }
 
-/// True if `s` contains a UUID in its usual 8-4-4-4-12 hex form.
+/// True if `s` contains a UUID in its usual 8-4-4-4-12 hex form. Only the
+/// first four groups are required, since mDNS's 63-byte label limit often
+/// cuts the last one short.
 fn contains_uuid(s: &str) -> bool {
-    s.as_bytes().windows(36).any(|w| {
+    s.as_bytes().windows(23).any(|w| {
         w.iter().enumerate().all(|(i, b)| match i {
-            8 | 13 | 18 | 23 => *b == b'-',
+            8 | 13 | 18 => *b == b'-',
             _ => b.is_ascii_hexdigit(),
         })
     })
+}
+
+/// A single token of mixed-case letters with digits scattered through it,
+/// like `I0xKUVb8n14AAA`. Names such as `iPhone15` or `MacBookPro16` have
+/// at most one switch between letters and digits.
+fn looks_random(name: &str) -> bool {
+    let has = |f: fn(&char) -> bool| name.chars().any(|c| f(&c));
+    let switches = name.as_bytes().windows(2).filter(|w| w[0].is_ascii_digit() != w[1].is_ascii_digit()).count();
+    name.len() >= 10
+        && name.chars().all(|c| c.is_ascii_alphanumeric())
+        && has(char::is_ascii_uppercase)
+        && has(char::is_ascii_lowercase)
+        && switches >= 4
+}
+
+/// Android's default hostname: `Android_` plus eight random characters.
+fn is_android_default_host(name: &str) -> bool {
+    name.strip_prefix("Android_")
+        .is_some_and(|rest| rest.len() == 8 && rest.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit()))
 }
 
 /// Human-friendly label for an mDNS service type.
@@ -453,6 +478,15 @@ mod tests {
         assert!(looks_opaque("nearby-presence-nsd-00000000-1111-2222-3333-444444444444"));
         assert!(!looks_opaque("Office-Laptop"));
         assert!(!looks_opaque("Kitchen-iPhone-17"));
+        // A UUID cut short by mDNS's 63-byte label limit.
+        assert!(looks_opaque("N18XA-XE577-G94C1-3R0EE-RAJXJ-15AAC|4bafb6ca-a761-47e6-8343-499"));
+        assert!(looks_opaque("I0xKUVb8n14AAA"));
+        assert!(looks_opaque("Android_VT4RRQL7"));
+        assert!(!looks_opaque("Android"));
+        assert!(!looks_opaque("MacBookPro16"));
+        assert!(!looks_opaque("Daddy-Pigs-iPhone-17"));
+        assert!(!looks_opaque("DESKTOP-C5FLT60"));
+        assert!(!looks_opaque("rnp5838797bb679"));
     }
 
     #[test]
