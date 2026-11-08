@@ -190,9 +190,14 @@ fn parse_getmac(text: &str, adapter: &str) -> Option<MacAddr> {
     })
 }
 
+/// macOS can report `02:00:00:00:00:00` in place of the real address, so
+/// that counts as no MAC.
 #[cfg_attr(any(target_os = "linux", not(unix)), allow(dead_code))]
 fn parse_ifconfig_ether(text: &str) -> Option<MacAddr> {
-    text.lines().find_map(|line| line.trim().strip_prefix("ether ")?.split_whitespace().next()?.parse().ok())
+    const PLACEHOLDER: MacAddr = MacAddr([2, 0, 0, 0, 0, 0]);
+    let mac: MacAddr =
+        text.lines().find_map(|line| line.trim().strip_prefix("ether ")?.split_whitespace().next()?.parse().ok())?;
+    (mac != PLACEHOLDER).then_some(mac)
 }
 
 #[cfg(target_os = "linux")]
@@ -261,6 +266,7 @@ mod tests {
                         \tether 02:00:00:00:00:02\n\tinet 10.0.0.5 netmask 0xffffff00\n";
         assert_eq!(parse_ifconfig_ether(ifconfig).map(|m| m.to_string()).as_deref(), Some("02:00:00:00:00:02"));
         assert_eq!(parse_ifconfig_ether("lo0: flags=8049<UP>\n"), None);
+        assert_eq!(parse_ifconfig_ether("en0: flags=8863<UP>\n\tether 02:00:00:00:00:00\n"), None);
     }
 
     fn iface(ip: [u8; 4], prefix: u8) -> Iface {
