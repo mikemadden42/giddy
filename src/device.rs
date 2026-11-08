@@ -409,12 +409,14 @@ pub fn is_useful_label(s: &str) -> bool {
 
 /// True for machine-generated identifiers (UUIDs, long hex hashes, MACs,
 /// random tokens) that make poor display names, including names with a UUID
-/// embedded, like Android's `nearby-presence-nsd-<uuid>`.
+/// embedded, like Android's `nearby-presence-nsd-<uuid>`, or a MAC prefix,
+/// like Apple's `_apple-mobdev2` instances, `<mac>@<ipv6>-supportsRP-24`.
 pub fn looks_opaque(name: &str) -> bool {
     let core: String = name.chars().filter(|c| !matches!(c, '-' | ':' | '_')).collect();
     let hex = core.chars().all(|c| c.is_ascii_hexdigit());
     (hex && core.len() >= 12)
         || core.is_empty()
+        || name.split_once('@').is_some_and(|(prefix, _)| prefix.parse::<MacAddr>().is_ok())
         || contains_uuid(name)
         || looks_random(name)
         || is_android_default_host(name)
@@ -516,6 +518,8 @@ mod tests {
         assert!(looks_opaque("N18XA-XE577-G94C1-3R0EE-RAJXJ-15AAC|4bafb6ca-a761-47e6-8343-499"));
         assert!(looks_opaque("I0xKUVb8n14AAA"));
         assert!(looks_opaque("Android_VT4RRQL7"));
+        assert!(looks_opaque("d2:e9:c1:bd:80:86@fe80::d0e9:c1ff:febd:8086-supportsRP-24"));
+        assert!(!looks_opaque("Guest@Home"));
         assert!(!looks_opaque("Android"));
         assert!(!looks_opaque("MacBookPro16"));
         assert!(!looks_opaque("Daddy-Pigs-iPhone-17"));
