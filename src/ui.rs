@@ -192,7 +192,7 @@ fn draw_table(f: &mut Frame, app: &mut App, area: Rect) {
             cells.push(Cell::from(Span::styled(label, Style::new().fg(Color::Blue))));
         }
         cells.push(Cell::from(name_line(d)));
-        cells.push(Cell::from(d.mac.map(|m| m.to_string()).unwrap_or_default()));
+        cells.push(Cell::from(d.mac.map_or_default(|m| m.to_string())));
         if show_vendor {
             cells.push(Cell::from(vendor_span(d)));
         }

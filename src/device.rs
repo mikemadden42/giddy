@@ -447,10 +447,12 @@ fn looks_random(name: &str) -> bool {
         && switches >= 4
 }
 
-/// Android's default hostname: `Android_` plus eight random characters.
+/// Android's default hostname: `Android_` plus eight random characters, in
+/// either case (some phones send `android_wlr2lkqr`).
 fn is_android_default_host(name: &str) -> bool {
-    name.strip_prefix("Android_")
-        .is_some_and(|rest| rest.len() == 8 && rest.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit()))
+    name.split_at_checked(8).is_some_and(|(prefix, rest)| {
+        prefix.eq_ignore_ascii_case("Android_") && rest.len() == 8 && rest.chars().all(|c| c.is_ascii_alphanumeric())
+    })
 }
 
 /// Human-friendly label for an mDNS service type.
@@ -518,6 +520,8 @@ mod tests {
         assert!(looks_opaque("N18XA-XE577-G94C1-3R0EE-RAJXJ-15AAC|4bafb6ca-a761-47e6-8343-499"));
         assert!(looks_opaque("I0xKUVb8n14AAA"));
         assert!(looks_opaque("Android_VT4RRQL7"));
+        assert!(looks_opaque("android_wlr2lkqr"));
+        assert!(!looks_opaque("android_phone"));
         assert!(looks_opaque("d2:e9:c1:bd:80:86@fe80::d0e9:c1ff:febd:8086-supportsRP-24"));
         assert!(!looks_opaque("Guest@Home"));
         assert!(!looks_opaque("Android"));

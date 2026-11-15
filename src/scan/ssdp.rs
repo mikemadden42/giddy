@@ -28,10 +28,7 @@ pub struct State {
 
 impl State {
     fn start_fetch(&mut self, location: &str) -> bool {
-        if self.fetched.contains(location) || !self.in_flight.insert(location.to_string()) {
-            return false;
-        }
-        true
+        !self.fetched.contains(location) && self.in_flight.insert(location.to_string())
     }
 
     fn finish_fetch(&mut self, location: String, succeeded: bool) {
