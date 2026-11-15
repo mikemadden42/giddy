@@ -138,7 +138,7 @@ impl App {
     /// /16) doesn't dim devices it just hasn't reached again yet.
     pub fn stale_after(&self) -> Duration {
         let base = (self.cfg.interval * 3).max(Duration::from_secs(90));
-        let current = self.status.cycle_started.map(|t| t.elapsed()).unwrap_or_default();
+        let current = self.status.cycle_started.map_or_default(|t| t.elapsed());
         base.max(self.status.last_cycle.max(current) * 3 / 2)
     }
 

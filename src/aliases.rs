@@ -25,19 +25,15 @@ fn config_path() -> Option<PathBuf> {
 impl Aliases {
     pub fn load() -> Self {
         let path = config_path();
-        let map = path
-            .as_ref()
-            .and_then(|p| std::fs::read_to_string(p).ok())
-            .map(|text| {
-                text.lines()
-                    .filter_map(|l| {
-                        let (mac, alias) = l.split_once('\t')?;
-                        Some((mac.trim().parse().ok()?, alias.trim().to_string()))
-                    })
-                    .filter(|(_, a): &(MacAddr, String)| !a.is_empty())
-                    .collect()
-            })
-            .unwrap_or_default();
+        let map = path.as_ref().and_then(|p| std::fs::read_to_string(p).ok()).map_or_default(|text| {
+            text.lines()
+                .filter_map(|l| {
+                    let (mac, alias) = l.split_once('\t')?;
+                    Some((mac.trim().parse().ok()?, alias.trim().to_string()))
+                })
+                .filter(|(_, a): &(MacAddr, String)| !a.is_empty())
+                .collect()
+        });
         Aliases { path, map }
     }
 

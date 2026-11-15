@@ -198,7 +198,7 @@ fn csv(out: &mut impl Write, devices: &[&Device]) -> io::Result<()> {
                 d.ip.to_string(),
                 text(kind::classify(d).map(kind::Kind::label)),
                 text(d.display_name()),
-                d.mac.map(|m| m.to_string()).unwrap_or_default(),
+                d.mac.map_or_default(|m| m.to_string()),
                 d.mac.is_some_and(MacAddr::is_local).to_string(),
                 text(d.manufacturer()),
                 text(d.model()),
